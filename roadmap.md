@@ -79,7 +79,7 @@
 
 **Objectif** : Interface visuelle moderne pour observer le déroulement en temps réel.
 
-### 2.1 -- Rendu du graphe réseau (Pygame)
+### 2.1 -- Rendu du graphe réseau (Pygame + Rich)
 - Fenêtre Pygame avec rendu du graphe NetworkX (layout spring ou kamada-kawai)
 - Chaque nœud est un cercle avec :
   - **Couleur** selon l'état : Bleu (sûr), Jaune (scanné/énuméré), Rouge (compromis USER), Rouge vif/pulsant (ROOT), Gris (crashé/isolé)
