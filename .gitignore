@@ -1,8 +1,3 @@
-# ==========================================
-# Attack & Defense RL -- .gitignore
-# ==========================================
-
-# --- Python ---
 __pycache__/
 *.py[codz]
 *$py.class
@@ -13,40 +8,33 @@ dist/
 build/
 *.whl
 
-# --- Environments ---
 .env
 .venv
 venv/
 env/
 
-# --- Tests & Coverage ---
 .pytest_cache/
 htmlcov/
 .coverage
 .coverage.*
 coverage.xml
 
-# --- Linting / Formatting ---
 .ruff_cache/
 .mypy_cache/
 
-# --- IDE ---
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# --- Project docs (privés, pas sur GitHub) ---
 CLAUDE.md
 plan.md
 roadmap.md
 
-# --- Artefacts projet (données lourdes) ---
 models/*
 !models/.gitkeep
 logs/*
 !logs/.gitkeep
 
-# --- OS ---
 .DS_Store
 Thumbs.db
