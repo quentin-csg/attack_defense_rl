@@ -16,22 +16,38 @@ from __future__ import annotations
 
 import os
 
+# Type-only import to avoid circular at runtime
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pygame
 
-from src.environment.network import Network
 from src.visualization import theme
+from src.visualization.controls import DashboardControls, handle_key_event
 from src.visualization.graph_view import (
     NodePositions,
     compute_layout,
     draw_agent_halo,
+    draw_attacker_path,
     draw_edges,
+    draw_flash_effect,
+    draw_node_icons,
     draw_node_labels,
-    draw_nodes,
+    draw_pulse_effect,
     draw_special_markers,
-    draw_stats_overlay,
     fog_node_ids,
 )
+from src.visualization.ui_panels import (
+    _PANEL_NAMES,
+    draw_action_log,
+    draw_sidebar_panels,
+    draw_stats_panel,
+    draw_suspicion_bars,
+    get_panel_header_rects,
+)
+
+if TYPE_CHECKING:
+    from src.visualization.render_state import RenderState
 
 
 def _load_font(size: int) -> pygame.font.Font:
@@ -72,11 +88,30 @@ class PygameRenderer:
             (theme.WINDOW_WIDTH, theme.WINDOW_HEIGHT)
         )
         self._clock: pygame.time.Clock = pygame.time.Clock()
+
+        # Fonts
         self._font_stats: pygame.font.Font = _load_font(theme.FONT_SIZE_STATS)
         self._font_label: pygame.font.Font = _load_font(theme.FONT_SIZE_LABEL)
+        self._font_panel_header: pygame.font.Font = _load_font(theme.FONT_SIZE_PANEL_HEADER)
+        self._font_panel_body: pygame.font.Font = _load_font(theme.FONT_SIZE_PANEL_BODY)
+        self._font_log: pygame.font.Font = _load_font(theme.FONT_SIZE_LOG)
 
         self._layout: NodePositions | None = None
         self._open: bool = True
+
+        # Animation state
+        self._anim_time: float = 0.0
+        self._flash_events: list[tuple[int, float]] = []  # (node_id, time_remaining)
+
+        # Panel state (all collapsed by default)
+        self._panel_expanded: dict[str, bool] = {name: False for name in _PANEL_NAMES}
+
+        # Pre-computed panel rects (set on first render)
+        self._panel_header_rects: dict[str, pygame.Rect] = {}
+
+        # Dashboard controls (pause, speed) — owned by the renderer so that
+        # it is the single consumer of the Pygame event queue.
+        self._controls: DashboardControls = DashboardControls()
 
     # ------------------------------------------------------------------
     # Public API
@@ -87,73 +122,48 @@ class PygameRenderer:
         """Whether the window is still open (not closed by the user)."""
         return self._open
 
-    def update(
-        self,
-        network: Network,
-        agent_position: int,
-        step: int,
-        episode_reward: float,
-        n_compromised: int,
-        max_suspicion: float,
-    ) -> None:
+    @property
+    def controls(self) -> DashboardControls:
+        """Dashboard controls (pause, speed multiplier)."""
+        return self._controls
+
+    def update(self, state: RenderState) -> None:
         """Redraw the frame and flip the display. Non-blocking.
 
         Also pumps pygame events so the window stays responsive.
 
         Args:
-            network: The current network state.
-            agent_position: Current Red Team node ID.
-            step: Current episode step.
-            episode_reward: Cumulative episode reward.
-            n_compromised: Number of compromised nodes.
-            max_suspicion: Highest suspicion level (0-100).
+            state: Full render state snapshot from CyberEnv.
         """
         self._handle_events()
         if not self._open:
             return
 
-        self._ensure_layout(network)
-        self._render_frame(
-            self._screen,
-            network,
-            agent_position,
-            step,
-            episode_reward,
-            n_compromised,
-            max_suspicion,
-        )
+        self._ensure_layout(state.network)
+        self._tick_animation()
+        self._maybe_add_flash(state)
+        self._render_frame(self._screen, state)
         pygame.display.flip()
         self._clock.tick(theme.FPS)
 
-    def get_frame(
-        self,
-        network: Network,
-        agent_position: int,
-        step: int,
-        episode_reward: float,
-        n_compromised: int,
-        max_suspicion: float,
-    ) -> np.ndarray:
+    def get_frame(self, state: RenderState) -> np.ndarray:
         """Render to an offscreen surface and return as an RGB numpy array.
 
         Used for render_mode="rgb_array". Useful for headless tests and
         video recording.
 
+        Args:
+            state: Full render state snapshot from CyberEnv.
+
         Returns:
             np.ndarray of shape (H, W, 3) and dtype uint8.
         """
-        self._ensure_layout(network)
+        self._ensure_layout(state.network)
+        self._tick_animation()
+        self._maybe_add_flash(state)
 
         offscreen = pygame.Surface((theme.WINDOW_WIDTH, theme.WINDOW_HEIGHT))
-        self._render_frame(
-            offscreen,
-            network,
-            agent_position,
-            step,
-            episode_reward,
-            n_compromised,
-            max_suspicion,
-        )
+        self._render_frame(offscreen, state)
         # surfarray.array3d returns (W, H, 3); transpose to (H, W, 3).
         raw = pygame.surfarray.array3d(offscreen)
         return np.transpose(raw, (1, 0, 2))
@@ -176,7 +186,7 @@ class PygameRenderer:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _ensure_layout(self, network: Network) -> None:
+    def _ensure_layout(self, network) -> None:
         """Compute and cache the node layout if it has not been computed yet."""
         if self._layout is None:
             graph_area = pygame.Rect(
@@ -187,44 +197,97 @@ class PygameRenderer:
             )
             self._layout = compute_layout(network.graph, graph_area)
 
+    def _tick_animation(self) -> None:
+        """Advance animation timers by one frame."""
+        dt = 1.0 / theme.FPS
+        self._anim_time += dt
+        self._flash_events = [
+            (nid, t - dt) for nid, t in self._flash_events if t - dt > 0
+        ]
+
+    def _maybe_add_flash(self, state: RenderState) -> None:
+        """Add a flash event when a new action has been registered."""
+        if (
+            state.last_action_success
+            and state.last_action_target is not None
+            and state.last_action_target in state.network.nodes
+        ):
+            # Only add if not already flashing this node
+            flashing_ids = {nid for nid, _ in self._flash_events}
+            if state.last_action_target not in flashing_ids:
+                self._flash_events.append((state.last_action_target, theme.FLASH_DURATION))
+
     def _handle_events(self) -> None:
-        """Process the Pygame event queue. Sets _open=False on QUIT."""
+        """Process the Pygame event queue."""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self._open = False
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._handle_panel_click(event.pos)
+            elif event.type == pygame.KEYDOWN:
+                self._handle_key(event.key)
 
-    def _render_frame(
-        self,
-        surface: pygame.Surface,
-        network: Network,
-        agent_position: int,
-        step: int,
-        episode_reward: float,
-        n_compromised: int,
-        max_suspicion: float,
-    ) -> None:
+    def _handle_panel_click(self, pos: tuple[int, int]) -> None:
+        """Toggle a panel if its header was clicked."""
+        for name, rect in self._panel_header_rects.items():
+            if rect.collidepoint(pos):
+                self._panel_expanded[name] = not self._panel_expanded[name]
+                break
+
+    def _handle_key(self, key: int) -> None:
+        """Handle keyboard shortcuts (ESC + DashboardControls keys)."""
+        if key == pygame.K_ESCAPE:
+            self._open = False
+        else:
+            # Delegate SPACE/+/-/R to DashboardControls
+            event = pygame.event.Event(pygame.KEYDOWN, {"key": key, "mod": 0, "unicode": ""})
+            handle_key_event(event, self._controls)
+
+    def _render_frame(self, surface: pygame.Surface, state: RenderState) -> None:
         """Draw one complete frame onto the given surface (back-to-front)."""
         assert self._layout is not None  # _ensure_layout must be called first
 
         surface.fill(theme.BG_COLOR)
-        fogged = fog_node_ids(network)
+        fogged = fog_node_ids(state.network)
 
-        draw_edges(surface, network.graph, self._layout, fogged)
-        draw_nodes(surface, network, self._layout, fogged)
-        draw_agent_halo(surface, agent_position, self._layout)
+        # --- Graph zone (centre) ---
+        draw_edges(surface, state.network.graph, self._layout, fogged)
+        draw_attacker_path(surface, state.attacker_path, self._layout)
+        draw_node_icons(surface, state.network, self._layout, fogged)
+        draw_pulse_effect(surface, state.network, self._layout, self._anim_time)
+        draw_flash_effect(surface, self._flash_events, self._layout)
+        draw_agent_halo(surface, state.agent_position, self._layout)
         draw_special_markers(
             surface,
-            network.entry_node_id,
-            network.target_node_id,
+            state.network.entry_node_id,
+            state.network.target_node_id,
             self._layout,
         )
         draw_node_labels(surface, self._layout, self._font_label)
-        draw_stats_overlay(
-            surface,
-            self._font_stats,
-            step=step,
-            episode_reward=episode_reward,
-            n_compromised=n_compromised,
-            total_nodes=network.num_nodes,
-            max_suspicion=max_suspicion,
+
+        # --- Stats panel (top-left) ---
+        stats_rect = pygame.Rect(*theme.STATS_PANEL_RECT)
+        draw_stats_panel(surface, stats_rect, self._font_stats, state)
+
+        # --- Sidebar collapsible panels ---
+        sidebar_rect = pygame.Rect(*theme.SIDEBAR_RECT)
+        fonts = {"header": self._font_panel_header, "body": self._font_panel_body}
+        draw_sidebar_panels(surface, sidebar_rect, fonts, state, self._panel_expanded)
+        # Update clickable header rects (in case sidebar layout changed)
+        self._panel_header_rects = get_panel_header_rects(sidebar_rect, self._font_panel_header)
+
+        # --- Suspicion bars (bottom-left) ---
+        susp_rect = pygame.Rect(*theme.SUSPICION_RECT)
+        draw_suspicion_bars(surface, susp_rect, self._font_log, state.per_node_suspicion)
+
+        # --- Action log (right panel) ---
+        log_rect = pygame.Rect(*theme.ACTION_LOG_RECT)
+        draw_action_log(surface, log_rect, self._font_log, state.action_log)
+
+        # --- Controls hint (bottom centre) ---
+        hint = self._font_log.render(
+            "ESC=quit  click panel=expand",
+            True,
+            theme.COLOR_HINT,
         )
+        surface.blit(hint, (theme.GRAPH_AREA_LEFT + 10, theme.WINDOW_HEIGHT - 16))

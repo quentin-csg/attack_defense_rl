@@ -5,6 +5,13 @@ Usage:
     python scripts/visualize.py --seed 123               # custom seed
     python scripts/visualize.py --speed 3                # slower (default 10 FPS)
     python scripts/visualize.py --model models/red_agent_final.zip  # trained agent
+
+Controls (keyboard):
+    SPACE      pause / resume
+    + / UP     speed up
+    - / DOWN   slow down
+    R          reset speed to default
+    ESC        quit
 """
 
 from __future__ import annotations
@@ -42,7 +49,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    delay = 1.0 / max(args.speed, 1)
+    base_delay = 1.0 / max(args.speed, 1)
 
     # Load trained model if provided
     model = None
@@ -60,14 +67,31 @@ def main() -> None:
 
     env = CyberEnv(seed=args.seed, max_steps=args.max_steps, render_mode="human")
     obs, info = env.reset()
+    # First render creates the renderer; controls are owned by it.
     env.render()
 
     agent_label = f"model={Path(args.model).name}" if args.model else "random"
     print(f"Episode started  |  seed={args.seed}  |  speed={args.speed} FPS  |  agent={agent_label}")
-    print("Close the Pygame window or press Ctrl+C to stop.\n")
+    print("Controls: SPACE=pause  +/-=speed  R=reset  ESC=quit\n")
 
     try:
         for step in range(args.max_steps):
+            # The renderer is the sole consumer of the Pygame event queue.
+            # env.render() → renderer.update() → renderer._handle_events() processes
+            # all QUIT / KEYDOWN (SPACE, +/-, R, ESC) / MOUSEBUTTONDOWN events.
+            # We read the resulting state from env.renderer_controls.
+            controls = env.renderer_controls
+
+            # Check if user closed the window
+            if controls is not None and not env._renderer.is_open:
+                break
+
+            # If paused: redraw without stepping, sleep briefly
+            if controls is not None and controls.paused:
+                env.render()
+                time.sleep(0.05)
+                continue
+
             mask = env.action_masks()
 
             if model is not None:
@@ -81,13 +105,6 @@ def main() -> None:
             obs, reward, terminated, truncated, info = env.step(action)
             env.render()
 
-            action_type, target = action // MAX_NODES, action % MAX_NODES
-            action_name = ActionType(action_type).name
-            print(
-                f"  Step {step + 1:>3d}  |  {action_name:<22s} -> node {target}  |"
-                f"  reward={reward:+.1f}  |  suspicion={info['max_suspicion']:.0f}%"
-            )
-
             if terminated:
                 if info.get("exfiltrated"):
                     print("\n  >>> EXFILTRATION SUCCESSFUL <<<")
@@ -98,20 +115,20 @@ def main() -> None:
                 print("\n  >>> MAX STEPS REACHED <<<")
                 break
 
-            time.sleep(delay)
+            # Sleep adjusted by speed multiplier
+            speed_mult = controls.speed_multiplier if controls is not None else 1.0
+            effective_delay = base_delay / max(speed_mult, 0.01)
+            time.sleep(effective_delay)
 
         print(f"\nEpisode finished  |  total reward: {info['episode_reward']:+.1f}")
-        print("Window stays open — close it or press Ctrl+C to exit.")
+        print("Window stays open — close it or press ESC / Ctrl+C to exit.")
 
         # Keep the window open until the user closes it
-        import pygame
-
         while True:
-            pygame.event.pump()
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    return
-            time.sleep(0.1)
+            if env._renderer is None or not env._renderer.is_open:
+                break
+            env.render()
+            time.sleep(0.05)
 
     except KeyboardInterrupt:
         print("\nInterrupted.")

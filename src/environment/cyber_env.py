@@ -78,7 +78,6 @@ class CyberEnv(gym.Env):
         self._np_rng = np.random.default_rng(seed)
 
         # Network setup
-        self._network_factory = network
         self.network: Network = network if network is not None else build_fixed_network(seed)
 
         # Fog of war
@@ -125,6 +124,13 @@ class CyberEnv(gym.Env):
         self.exfiltrated: bool = False
         self._detected: bool = False
 
+        # Render state accumulators (used by _build_render_state)
+        self._action_log: list[Any] = []   # list[LogEntry], lazy import to avoid Pygame dep
+        self._attacker_path: list[int] = []
+        self._last_action_type: str | None = None
+        self._last_action_target: int | None = None
+        self._last_action_success: bool = False
+
         # Renderer (created lazily on first render() call)
         self._renderer: Any = None
 
@@ -170,9 +176,16 @@ class CyberEnv(gym.Env):
         self.exfiltrated = False
         self._detected = False
 
+        # Render accumulators
+        self._action_log = []
+        self._last_action_type = None
+        self._last_action_target = None
+        self._last_action_success = False
+
         # Red Team starts at entry node with DISCOVERED status
         entry = self.network.entry_node_id
         self.agent_position = entry
+        self._attacker_path = [entry]
         entry_node = self.network.get_node(entry)
         entry_node.discovery_level = DiscoveryLevel.DISCOVERED
         entry_node.session_level = SessionLevel.USER
@@ -223,11 +236,26 @@ class CyberEnv(gym.Env):
         if action_type == ActionType.CREDENTIAL_DUMP and result.success:
             self.has_dumped_creds = True
 
-        # Update agent position (move to target if we have a session there)
-        if target_node_id in self.network.nodes:
+        # Update agent position only for explicit movement actions
+        _movement_actions = {ActionType.EXPLOIT, ActionType.BRUTE_FORCE, ActionType.LATERAL_MOVE, ActionType.PIVOT}
+        if action_type in _movement_actions and result.success and target_node_id in self.network.nodes:
             target = self.network.get_node(target_node_id)
             if target.session_level != SessionLevel.NONE:
                 self.agent_position = target_node_id
+                if target_node_id not in self._attacker_path:
+                    self._attacker_path.append(target_node_id)
+
+        # Accumulate render log entry (stored as plain tuple — converted to LogEntry in _build_render_state)
+        self._last_action_type = action_type.name
+        self._last_action_target = target_node_id
+        self._last_action_success = result.success
+        susp_delta = result.suspicion_delta
+        susp_str = f" ({susp_delta:+.0f} Susp)" if susp_delta else ""
+        status_str = "SUCCESS" if result.success else "FAIL"
+        log_text = f"[{self.current_step}] {action_type.name} Node {target_node_id}: {status_str}{susp_str}"
+        color_key = "red_success" if result.success else "red_fail"
+        # Store as (step, text, color_key) tuple — LogEntry created lazily in _build_render_state
+        self._action_log.append((self.current_step, log_text, color_key))
 
         # Check exfiltration success
         if action_type == ActionType.EXFILTRATE and result.success:
@@ -264,7 +292,7 @@ class CyberEnv(gym.Env):
         """Build the current observation."""
         return self.fog.build_observation(
             nodes=self.network.nodes,
-            adjacency=self._base_adjacency,
+            adjacency=self._build_adjacency(),
             current_step=self.current_step,
             max_steps=self.max_steps,
             num_real_nodes=self.network.num_nodes,
@@ -291,6 +319,44 @@ class CyberEnv(gym.Env):
             "agent_position": self.agent_position,
         }
 
+    def _build_render_state(self) -> Any:
+        """Build a RenderState snapshot for the Pygame renderer.
+
+        Lazy-imports RenderState and LogEntry to avoid pulling Pygame into
+        training mode (render_mode=None).
+        """
+        from src.visualization.render_state import LogEntry, RenderState
+
+        info = self._get_info()
+        n_total = self.network.num_nodes
+        n_unknown = sum(
+            1 for n in self.network.nodes.values() if n.discovery_level == DiscoveryLevel.UNKNOWN
+        )
+        fog_pct = (n_unknown / n_total * 100.0) if n_total > 0 else 0.0
+
+        log_entries = [
+            LogEntry(step=s, text=t, color_key=c) for s, t, c in self._action_log
+        ]
+        per_node_susp = {nid: n.suspicion_level for nid, n in self.network.nodes.items()}
+
+        return RenderState(
+            network=self.network,
+            agent_position=self.agent_position,
+            step=info["step"],
+            episode_reward=info["episode_reward"],
+            n_compromised=info["n_compromised"],
+            n_discovered=info["n_discovered"],
+            total_nodes=n_total,
+            max_suspicion=info["max_suspicion"],
+            fog_percentage=fog_pct,
+            action_log=log_entries,
+            last_action_type=self._last_action_type,
+            last_action_target=self._last_action_target,
+            last_action_success=self._last_action_success,
+            attacker_path=list(self._attacker_path),
+            per_node_suspicion=per_node_susp,
+        )
+
     def render(self) -> np.ndarray | None:
         """Render the current environment state.
 
@@ -307,22 +373,26 @@ class CyberEnv(gym.Env):
             # rgb_array mode renders to an offscreen buffer — no real window needed.
             self._renderer = PygameRenderer(headless=(self.render_mode == "rgb_array"))
 
-        info = self._get_info()
-        kwargs: dict[str, Any] = {
-            "network": self.network,
-            "agent_position": self.agent_position,
-            "step": info["step"],
-            "episode_reward": info["episode_reward"],
-            "n_compromised": info["n_compromised"],
-            "max_suspicion": info["max_suspicion"],
-        }
+        state = self._build_render_state()
 
         if self.render_mode == "human":
-            self._renderer.update(**kwargs)
+            self._renderer.update(state)
             return None
         elif self.render_mode == "rgb_array":
-            return self._renderer.get_frame(**kwargs)
+            return self._renderer.get_frame(state)
         return None
+
+    @property
+    def renderer_controls(self):
+        """DashboardControls owned by the renderer (pause, speed).
+
+        Returns None if the renderer has not been created yet (no render call made).
+        Use this in scripts to read pause/speed state without handling Pygame events
+        directly — the renderer is the sole consumer of the Pygame event queue.
+        """
+        if self._renderer is None:
+            return None
+        return self._renderer.controls
 
     def close(self) -> None:
         """Clean up the renderer and Pygame resources."""

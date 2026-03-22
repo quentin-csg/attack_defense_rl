@@ -1,4 +1,4 @@
-"""Tests for Phase 2 minimal visualization.
+"""Tests for Phase 2 minimal and complete visualization.
 
 All tests run headless via SDL_VIDEODRIVER=dummy (set in conftest.py).
 Tests verify behavior and correctness, not pixel-perfect output.
@@ -16,6 +16,7 @@ from src.visualization.graph_view import (
     compute_layout,
     get_node_color,
 )
+from src.visualization.render_state import LogEntry, RenderState
 from src.visualization.renderer import PygameRenderer
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,27 @@ def human_env():
     env.close()
 
 
+def _make_render_state(network, step: int = 0, reward: float = 0.0) -> RenderState:
+    """Build a minimal valid RenderState for renderer tests."""
+    return RenderState(
+        network=network,
+        agent_position=0,
+        step=step,
+        episode_reward=reward,
+        n_compromised=0,
+        n_discovered=1,
+        total_nodes=network.num_nodes,
+        max_suspicion=0.0,
+        fog_percentage=80.0,
+        action_log=[],
+        last_action_type=None,
+        last_action_target=None,
+        last_action_success=False,
+        attacker_path=[0],
+        per_node_suspicion={nid: 0.0 for nid in network.nodes},
+    )
+
+
 # ---------------------------------------------------------------------------
 # TestThemeConstants
 # ---------------------------------------------------------------------------
@@ -81,6 +103,16 @@ class TestThemeConstants:
             "COLOR_TARGET_MARKER",
             "COLOR_AGENT_HALO",
             "COLOR_EDGE",
+            # Phase 2 complete additions
+            "COLOR_PANEL_BORDER",
+            "COLOR_PANEL_HEADER",
+            "COLOR_SUSPICION_LOW",
+            "COLOR_SUSPICION_MED",
+            "COLOR_SUSPICION_HIGH",
+            "COLOR_SUSPICION_CRIT",
+            "COLOR_LOG_RED_SUCCESS",
+            "COLOR_LOG_BLUE_ACTION",
+            "ATTACKER_PATH_COLOR",
         ]
         for attr in color_attrs:
             color = getattr(theme, attr)
@@ -98,6 +130,22 @@ class TestThemeConstants:
     def test_font_candidates_is_list(self) -> None:
         assert isinstance(theme.FONT_CANDIDATES, list)
         assert len(theme.FONT_CANDIDATES) > 0
+
+    def test_layout_constants(self) -> None:
+        assert theme.LEFT_PANEL_WIDTH > 0
+        assert theme.RIGHT_PANEL_WIDTH > 0
+        assert theme.GRAPH_AREA_WIDTH > 0
+        assert theme.GRAPH_AREA_LEFT == theme.LEFT_PANEL_WIDTH
+        assert theme.ICON_SIZE > 0
+        assert theme.FLASH_DURATION > 0
+        assert theme.PULSE_SPEED > 0
+
+    def test_panel_rect_tuples(self) -> None:
+        for attr in ("STATS_PANEL_RECT", "SIDEBAR_RECT", "SUSPICION_RECT", "ACTION_LOG_RECT"):
+            rect = getattr(theme, attr)
+            assert isinstance(rect, tuple)
+            assert len(rect) == 4
+            assert all(isinstance(v, int) for v in rect)
 
 
 # ---------------------------------------------------------------------------
@@ -232,82 +280,94 @@ class TestPygameRenderer:
         assert r.is_open is False
 
     def test_update_does_not_crash(self, renderer, fixed_network) -> None:
-        renderer.update(
-            network=fixed_network,
-            agent_position=0,
-            step=1,
-            episode_reward=-0.5,
-            n_compromised=1,
-            max_suspicion=10.0,
-        )
+        state = _make_render_state(fixed_network, step=1, reward=-0.5)
+        renderer.update(state)
 
     def test_update_multiple_steps(self, renderer, fixed_network) -> None:
         """Calling update multiple times should not crash."""
         for step in range(5):
-            renderer.update(
-                network=fixed_network,
-                agent_position=0,
-                step=step,
-                episode_reward=float(-step),
-                n_compromised=0,
-                max_suspicion=float(step * 3),
-            )
+            state = _make_render_state(fixed_network, step=step, reward=float(-step))
+            renderer.update(state)
 
     def test_get_frame_returns_ndarray(self, renderer, fixed_network) -> None:
-        frame = renderer.get_frame(
-            network=fixed_network,
-            agent_position=0,
-            step=0,
-            episode_reward=0.0,
-            n_compromised=0,
-            max_suspicion=0.0,
-        )
+        state = _make_render_state(fixed_network)
+        frame = renderer.get_frame(state)
         assert isinstance(frame, np.ndarray)
 
     def test_get_frame_shape(self, renderer, fixed_network) -> None:
-        frame = renderer.get_frame(
-            network=fixed_network,
-            agent_position=0,
-            step=0,
-            episode_reward=0.0,
-            n_compromised=0,
-            max_suspicion=0.0,
-        )
+        state = _make_render_state(fixed_network)
+        frame = renderer.get_frame(state)
         assert frame.shape == (theme.WINDOW_HEIGHT, theme.WINDOW_WIDTH, 3)
 
     def test_get_frame_dtype(self, renderer, fixed_network) -> None:
-        frame = renderer.get_frame(
-            network=fixed_network,
-            agent_position=0,
-            step=0,
-            episode_reward=0.0,
-            n_compromised=0,
-            max_suspicion=0.0,
-        )
+        state = _make_render_state(fixed_network)
+        frame = renderer.get_frame(state)
         assert frame.dtype == np.uint8
 
     def test_reset_layout_triggers_recompute(self, renderer, fixed_network) -> None:
         """reset_layout() should invalidate the layout and cause recomputation."""
-        renderer.update(
-            network=fixed_network,
-            agent_position=0,
-            step=0,
-            episode_reward=0.0,
-            n_compromised=0,
-            max_suspicion=0.0,
-        )
+        state = _make_render_state(fixed_network)
+        renderer.update(state)
         renderer.reset_layout()
         assert renderer._layout is None
         # Should recompute without crashing on next render
-        renderer.update(
-            network=fixed_network,
-            agent_position=0,
-            step=1,
-            episode_reward=-0.5,
-            n_compromised=0,
-            max_suspicion=0.0,
-        )
+        renderer.update(_make_render_state(fixed_network, step=1))
         assert renderer._layout is not None
+
+    def test_update_with_log_entries(self, renderer, fixed_network) -> None:
+        """Renderer must handle non-empty action log without crash."""
+        log = [
+            LogEntry(step=1, text="[1] SCAN Node 0: SUCCESS", color_key="red_success"),
+            LogEntry(step=2, text="[2] EXPLOIT Node 1: FAIL", color_key="red_fail"),
+        ]
+        state = _make_render_state(fixed_network)
+        state.action_log.extend(log)
+        renderer.update(state)  # must not raise
+
+    def test_update_with_attacker_path(self, renderer, fixed_network) -> None:
+        """Renderer must handle a non-trivial attacker path without crash."""
+        state = _make_render_state(fixed_network)
+        state.attacker_path.extend([0, 1, 2])
+        renderer.update(state)  # must not raise
+
+    def test_update_with_suspicion_data(self, renderer, fixed_network) -> None:
+        """Renderer must handle non-zero suspicion bars without crash."""
+        state = _make_render_state(fixed_network)
+        state.per_node_suspicion.update({0: 25.0, 1: 55.0, 2: 75.0, 3: 95.0})
+        renderer.update(state)  # must not raise
+
+    def test_panel_toggle_via_click(self, renderer, fixed_network) -> None:
+        """Simulating a mouse click on a panel header must toggle that panel."""
+        state = _make_render_state(fixed_network)
+        renderer.update(state)  # ensures header rects are populated
+
+        # Find the first panel header rect
+        if renderer._panel_header_rects:
+            name, rect = next(iter(renderer._panel_header_rects.items()))
+            assert renderer._panel_expanded[name] is False
+            renderer._handle_panel_click(rect.center)
+            assert renderer._panel_expanded[name] is True
+            renderer._handle_panel_click(rect.center)
+            assert renderer._panel_expanded[name] is False
+
+    def test_flash_event_added_on_success(self, renderer, fixed_network) -> None:
+        """A successful last_action should add a flash event."""
+        state = _make_render_state(fixed_network)
+        state.last_action_success = True
+        state.last_action_target = 0
+        assert len(renderer._flash_events) == 0
+        renderer._maybe_add_flash(state)
+        assert len(renderer._flash_events) == 1
+        assert renderer._flash_events[0][0] == 0
+
+    def test_flash_event_not_duplicated(self, renderer, fixed_network) -> None:
+        """A second flash on the same node should not be added."""
+        state = _make_render_state(fixed_network)
+        state.last_action_success = True
+        state.last_action_target = 0
+        renderer._maybe_add_flash(state)
+        renderer._maybe_add_flash(state)
+        assert len(renderer._flash_events) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +459,6 @@ class TestCyberEnvRender:
 
     def test_render_after_node_compromised(self, rgb_env) -> None:
         """Render must work correctly after a node is compromised (USER session)."""
-        from src.environment.node import SessionLevel
-
         rgb_env.network.get_node(1).session_level = SessionLevel.USER
         rgb_env.network.get_node(1).discovery_level = DiscoveryLevel.ENUMERATED
         frame = rgb_env.render()
@@ -408,8 +466,6 @@ class TestCyberEnvRender:
 
     def test_render_after_root_obtained(self, rgb_env) -> None:
         """Render must work correctly after a node reaches ROOT."""
-        from src.environment.node import SessionLevel
-
         rgb_env.network.get_node(1).session_level = SessionLevel.ROOT
         rgb_env.network.get_node(1).discovery_level = DiscoveryLevel.ENUMERATED
         frame = rgb_env.render()
@@ -417,7 +473,6 @@ class TestCyberEnvRender:
 
     def test_render_after_node_isolated(self, rgb_env) -> None:
         """Render must work correctly after a node is isolated (offline)."""
-        # Node 2 is adjacent to 0 — isolating it disconnects the graph sub-component.
         rgb_env.network.get_node(2).is_online = False
         frame = rgb_env.render()
         assert isinstance(frame, np.ndarray)
@@ -440,3 +495,22 @@ class TestCyberEnvRender:
             env.step(env.action_space.sample())
         assert env._renderer is None
         env.close()
+
+    def test_action_log_grows_after_steps(self, rgb_env) -> None:
+        """env._action_log should accumulate entries after steps."""
+        from src.environment.actions import ActionType, encode_action
+
+        assert len(rgb_env._action_log) == 0
+        rgb_env.step(encode_action(ActionType.WAIT, 0))
+        assert len(rgb_env._action_log) == 1
+
+    def test_render_state_has_correct_types(self, rgb_env) -> None:
+        """_build_render_state() must return a valid RenderState."""
+        from src.visualization.render_state import RenderState
+
+        state = rgb_env._build_render_state()
+        assert isinstance(state, RenderState)
+        assert isinstance(state.step, int)
+        assert isinstance(state.action_log, list)
+        assert isinstance(state.attacker_path, list)
+        assert isinstance(state.per_node_suspicion, dict)

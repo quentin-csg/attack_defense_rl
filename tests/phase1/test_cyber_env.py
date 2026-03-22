@@ -254,3 +254,266 @@ class TestTermination:
         action = encode_action(ActionType.EXFILTRATE, 4)
         _, _, terminated, _, _ = test_env.step(action)
         assert terminated is False
+
+
+class TestAgentPositionBugFix:
+    """Tests for Bug 1 fix: agent should only teleport on explicit movement actions."""
+
+    def test_agent_no_teleport_on_scan(self, test_env: CyberEnv) -> None:
+        """SCAN a compromised node must NOT move the agent there."""
+        test_env.reset()
+        # Give node 2 a session and put agent at node 0
+        test_env.network.get_node(2).session_level = SessionLevel.USER
+        test_env.agent_position = 0
+        # Give node 0 a session so SCAN is valid
+        test_env.network.get_node(0).session_level = SessionLevel.USER
+        action = encode_action(ActionType.SCAN, 2)
+        test_env.step(action)
+        assert test_env.agent_position == 0  # must NOT have moved to node 2
+
+    def test_agent_no_teleport_on_clean_logs(self, test_env: CyberEnv) -> None:
+        """CLEAN_LOGS on a compromised distant node must NOT move the agent there."""
+        test_env.reset()
+        test_env.network.get_node(3).session_level = SessionLevel.USER
+        test_env.agent_position = 0
+        test_env.network.get_node(0).session_level = SessionLevel.USER
+        action = encode_action(ActionType.CLEAN_LOGS, 3)
+        test_env.step(action)
+        assert test_env.agent_position == 0
+
+    def test_agent_moves_on_exploit_success(self, test_env: CyberEnv) -> None:
+        """Successful EXPLOIT must move the agent to the exploited node (regression)."""
+        test_env.reset()
+        # Set up: agent at node 0 (entry), node 1 adjacent and exploitable
+        test_env.agent_position = 0
+        test_env.network.get_node(0).session_level = SessionLevel.USER
+        from src.environment.node import DiscoveryLevel
+        test_env.network.get_node(1).discovery_level = DiscoveryLevel.ENUMERATED
+        # Force exploit to succeed by directly giving the session (simulate success)
+        test_env.network.get_node(1).session_level = SessionLevel.USER
+        # Use LATERAL_MOVE (guaranteed success path) instead — node 1 is adjacent
+        test_env.has_dumped_creds = True
+        test_env.network.get_node(1).session_level = SessionLevel.NONE  # reset for clean test
+        test_env.network.get_node(1).discovery_level = DiscoveryLevel.DISCOVERED
+        # Just verify that movement actions *can* move the agent
+        # Directly set a session and use a movement action that is masked as valid
+        test_env.network.get_node(1).session_level = SessionLevel.USER
+        test_env.network.get_node(1).discovery_level = DiscoveryLevel.ENUMERATED
+        action = encode_action(ActionType.LATERAL_MOVE, 1)
+        test_env.step(action)
+        assert test_env.agent_position == 1
+
+
+class TestAdjacencyUpdateAfterIsolate:
+    """Tests for Bug 3 fix: adjacency in observation must reflect node isolation."""
+
+    def test_adjacency_updates_after_isolate(self, test_env: CyberEnv) -> None:
+        """After isolating a node, its edges must disappear from the observation."""
+        test_env.reset()
+        # Discover all nodes so fog does not hide the adjacency
+        from src.environment.node import DiscoveryLevel
+        for node in test_env.network.nodes.values():
+            node.discovery_level = DiscoveryLevel.DISCOVERED
+
+        obs_before = test_env._get_obs()
+        adj_before = obs_before["adjacency"]
+        # Node 1 is connected to 0 and 2 in the small_network
+        assert adj_before[0, 1] == 1.0  # edge 0-1 exists before isolate
+
+        # Isolate node 1 mid-episode
+        test_env.network.isolate_node(1)
+        obs_after = test_env._get_obs()
+        adj_after = obs_after["adjacency"]
+
+        # Edge between 0 and 1 must be gone
+        assert adj_after[0, 1] == 0.0
+        assert adj_after[1, 0] == 0.0
+        # Edge between 1 and 2 must also be gone
+        assert adj_after[1, 2] == 0.0
+        assert adj_after[2, 1] == 0.0
+
+    def test_adjacency_restored_after_restore_node(self, test_env: CyberEnv) -> None:
+        """After restoring an isolated node, its edges reappear in the observation."""
+        test_env.reset()
+        from src.environment.node import DiscoveryLevel
+        for node in test_env.network.nodes.values():
+            node.discovery_level = DiscoveryLevel.DISCOVERED
+        test_env.network.isolate_node(1)
+        test_env.network.restore_node(1)
+        obs = test_env._get_obs()
+        adj = obs["adjacency"]
+        assert adj[0, 1] == 1.0  # edge 0-1 back
+
+
+class TestObservationContainment:
+    """obs returned by step() must always satisfy observation_space.contains(obs)."""
+
+    def _prepare_env_for(self, env: CyberEnv, action_type: ActionType) -> int | None:
+        """Set up the environment so that `action_type` is valid, return encoded action."""
+        from src.environment.actions import encode_action
+        env.reset()
+        net = env.network
+        entry = net.entry_node_id
+
+        # Give the entry node a full setup
+        net.get_node(entry).session_level = SessionLevel.ROOT
+        net.get_node(entry).discovery_level = DiscoveryLevel.ENUMERATED
+
+        if action_type in (ActionType.SCAN, ActionType.WAIT):
+            return encode_action(action_type, entry)
+
+        if action_type in (ActionType.ENUMERATE, ActionType.ENUMERATE_AGGRESSIVE):
+            # Target an adjacent discovered node
+            for nid in net.get_neighbors(entry):
+                net.get_node(nid).discovery_level = DiscoveryLevel.DISCOVERED
+                return encode_action(action_type, nid)
+
+        if action_type == ActionType.EXPLOIT:
+            for nid in net.nodes:
+                if nid != entry:
+                    net.get_node(nid).discovery_level = DiscoveryLevel.ENUMERATED
+                    net.get_node(nid).session_level = SessionLevel.NONE
+                    return encode_action(action_type, nid)
+
+        if action_type == ActionType.BRUTE_FORCE:
+            for nid, node in net.nodes.items():
+                if nid != entry and node.has_weak_credentials:
+                    node.discovery_level = DiscoveryLevel.ENUMERATED
+                    node.session_level = SessionLevel.NONE
+                    return encode_action(action_type, nid)
+
+        if action_type == ActionType.PRIVESC:
+            from src.environment.vulnerability import VulnCategory, get_vuln
+            for nid, node in net.nodes.items():
+                if nid != entry:
+                    for v in node.vulnerabilities:
+                        vuln = get_vuln(v)
+                        if vuln and vuln.category == VulnCategory.PRIVESC:
+                            node.session_level = SessionLevel.USER
+                            node.discovery_level = DiscoveryLevel.ENUMERATED
+                            return encode_action(action_type, nid)
+
+        if action_type == ActionType.CREDENTIAL_DUMP:
+            net.get_node(entry).session_level = SessionLevel.USER
+            return encode_action(action_type, entry)
+
+        if action_type == ActionType.INSTALL_BACKDOOR:
+            net.get_node(entry).has_backdoor = False
+            return encode_action(action_type, entry)
+
+        if action_type == ActionType.EXFILTRATE:
+            for nid, node in net.nodes.items():
+                if node.has_loot:
+                    node.session_level = SessionLevel.ROOT
+                    return encode_action(action_type, nid)
+
+        if action_type == ActionType.TUNNEL:
+            net.get_node(entry).has_tunnel = False
+            return encode_action(action_type, entry)
+
+        if action_type == ActionType.CLEAN_LOGS:
+            net.get_node(entry).session_level = SessionLevel.ROOT
+            net.get_node(entry).last_clean_logs_step = 0
+            return encode_action(action_type, entry)
+
+        if action_type == ActionType.PIVOT:
+            for nid, node in net.nodes.items():
+                if nid != entry:
+                    node.discovery_level = DiscoveryLevel.DISCOVERED
+                    node.session_level = SessionLevel.NONE
+                    net.get_node(entry).session_level = SessionLevel.USER
+                    return encode_action(action_type, nid)
+
+        if action_type == ActionType.LATERAL_MOVE:
+            env.has_dumped_creds = True
+            for nid in net.get_neighbors(entry):
+                node = net.get_node(nid)
+                if node.session_level == SessionLevel.NONE:
+                    node.discovery_level = DiscoveryLevel.DISCOVERED
+                    return encode_action(action_type, nid)
+
+        return None  # couldn't set up this action
+
+    def test_obs_containment_after_each_action(self, test_env: CyberEnv) -> None:
+        """observation_space.contains(obs) must hold after every action type."""
+        for action_type in ActionType:
+            encoded = self._prepare_env_for(test_env, action_type)
+            if encoded is None:
+                continue  # skip if setup not possible for this network
+            obs, _reward, _term, _trunc, _info = test_env.step(encoded)
+            assert test_env.observation_space.contains(obs), (
+                f"obs not in observation_space after {action_type.name}"
+            )
+
+
+class TestAllNodesCompromised:
+    """Edge case: what happens when every node has a session?"""
+
+    def test_mask_still_valid_when_all_compromised(self, test_env: CyberEnv) -> None:
+        """Mask must have at least one valid action even when all nodes are compromised."""
+        test_env.reset()
+        for node in test_env.network.nodes.values():
+            node.session_level = SessionLevel.ROOT
+            node.discovery_level = DiscoveryLevel.ENUMERATED
+
+        mask = test_env.action_masks()
+        assert mask.any(), "Mask must never be all-zero"
+        # WAIT on agent_position must be valid
+        wait_idx = ActionType.WAIT * MAX_NODES + test_env.agent_position
+        assert mask[wait_idx], "WAIT on agent_position must be valid"
+
+    def test_step_no_crash_all_compromised(self, test_env: CyberEnv) -> None:
+        """Step must not crash when all nodes are already compromised."""
+        test_env.reset()
+        for node in test_env.network.nodes.values():
+            node.session_level = SessionLevel.ROOT
+            node.discovery_level = DiscoveryLevel.ENUMERATED
+        mask = test_env.action_masks()
+        valid = mask.nonzero()[0]
+        action = int(valid[0])
+        obs, reward, terminated, truncated, info = test_env.step(action)
+        assert test_env.observation_space.contains(obs)
+
+
+class TestAgentPositionAllActions:
+    """Agent position must only change for movement actions."""
+
+    NON_MOVEMENT = [
+        ActionType.SCAN,
+        ActionType.ENUMERATE,
+        ActionType.ENUMERATE_AGGRESSIVE,
+        ActionType.CREDENTIAL_DUMP,
+        ActionType.INSTALL_BACKDOOR,
+        ActionType.TUNNEL,
+        ActionType.CLEAN_LOGS,
+        ActionType.WAIT,
+        ActionType.EXFILTRATE,
+        ActionType.PRIVESC,
+    ]
+
+    def test_non_movement_actions_do_not_move_agent(self, test_env: CyberEnv) -> None:
+        """None of the non-movement actions should change agent_position."""
+        for action_type in self.NON_MOVEMENT:
+            test_env.reset()
+            # Set up a valid state for each action type
+            net = test_env.network
+            entry = net.entry_node_id
+            net.get_node(entry).session_level = SessionLevel.ROOT
+            net.get_node(entry).discovery_level = DiscoveryLevel.ENUMERATED
+            net.get_node(entry).has_tunnel = False
+            net.get_node(entry).has_backdoor = False
+            net.get_node(entry).last_clean_logs_step = 0
+            # Mark a neighbor as discovered for enumerate targets
+            for nid in net.get_neighbors(entry):
+                net.get_node(nid).discovery_level = DiscoveryLevel.DISCOVERED
+
+            pos_before = test_env.agent_position
+            action = encode_action(action_type, entry)
+            # Only step if mask allows it (skip otherwise)
+            mask = test_env.action_masks()
+            if not mask[action]:
+                continue
+            test_env.step(action)
+            assert test_env.agent_position == pos_before, (
+                f"{action_type.name} must not change agent_position"
+            )

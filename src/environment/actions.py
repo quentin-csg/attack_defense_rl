@@ -426,14 +426,31 @@ def _execute_pivot(
 ) -> ActionResult:
     """PIVOT: access a discovered non-adjacent node via a compromised intermediary.
 
+    Grants a USER session on the target node and elevates discovery to ENUMERATED.
     After Fix 12: targets DISCOVERED (not UNKNOWN) nodes to avoid FoW leaks.
     """
     node = network.get_node(target_id)
+
+    # Guard: node must have no session (mask should enforce this, but defence-in-depth)
+    if node.session_level != SessionLevel.NONE:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "PIVOT", "target": target_id, "reason": "already_compromised"},
+        )
+
     susp = _apply_suspicion(node, SUSPICION_PIVOT, network)
 
+    # Only award NEW_NODE_COMPROMISED reward if node was uncompromised
+    was_none = node.session_level == SessionLevel.NONE  # always True here after the guard
+    node.session_level = SessionLevel.USER
+    node.discovery_level = DiscoveryLevel.ENUMERATED
+
+    reward = REWARD_NEW_NODE_COMPROMISED if was_none else 0.0
     return ActionResult(
         success=True,
-        reward=0.0,
+        reward=reward,
         suspicion_delta=susp,
         info={"action": "PIVOT", "target": target_id},
     )

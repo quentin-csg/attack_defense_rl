@@ -380,3 +380,75 @@ class TestNActionTypesConsistency:
 
         assert len(ActionType) == N_ACTION_TYPES
         assert len(ActionType) * MAX_NODES == N_ACTION_TYPES * MAX_NODES
+
+
+class TestPivotBugFix:
+    """Tests for Bug 2 fix: PIVOT must grant a USER session on the target node."""
+
+    def test_pivot_grants_user_session(self, small_network: Network) -> None:
+        """PIVOT must set session_level=USER on the target node."""
+        rng = random.Random(42)
+        # Set node 2 as DISCOVERED with no session
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        small_network.get_node(2).session_level = SessionLevel.NONE
+        # Agent at node 0, node 1 has a session (intermediary)
+        small_network.get_node(1).session_level = SessionLevel.USER
+        result = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert result.success is True
+        assert small_network.get_node(2).session_level == SessionLevel.USER
+
+    def test_pivot_sets_discovery_to_enumerated(self, small_network: Network) -> None:
+        """PIVOT must elevate the target node's discovery to ENUMERATED."""
+        rng = random.Random(42)
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        small_network.get_node(2).session_level = SessionLevel.NONE
+        small_network.get_node(1).session_level = SessionLevel.USER
+        execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert small_network.get_node(2).discovery_level == DiscoveryLevel.ENUMERATED
+
+    def test_pivot_reward_is_positive(self, small_network: Network) -> None:
+        """PIVOT must return a positive reward (REWARD_NEW_NODE_COMPROMISED)."""
+        rng = random.Random(42)
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        small_network.get_node(2).session_level = SessionLevel.NONE
+        small_network.get_node(1).session_level = SessionLevel.USER
+        result = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert result.reward == REWARD_NEW_NODE_COMPROMISED
+
+
+class TestPivotGuards:
+    """Tests for the defence-in-depth guards added to _execute_pivot."""
+
+    def test_pivot_fails_if_already_compromised(self, small_network: Network) -> None:
+        """PIVOT on an already-compromised node must return success=False and reward=0."""
+        rng = random.Random(42)
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        small_network.get_node(2).session_level = SessionLevel.USER  # already compromised
+        result = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert result.success is False
+        assert result.reward == 0.0
+
+    def test_pivot_does_not_downgrade_root(self, small_network: Network) -> None:
+        """PIVOT on a ROOT node must fail — not downgrade the session to USER."""
+        rng = random.Random(42)
+        small_network.get_node(2).discovery_level = DiscoveryLevel.ENUMERATED
+        small_network.get_node(2).session_level = SessionLevel.ROOT
+        result = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert result.success is False
+        # Session must stay ROOT, not be downgraded
+        assert small_network.get_node(2).session_level == SessionLevel.ROOT
+
+    def test_pivot_no_duplicate_reward(self, small_network: Network) -> None:
+        """Two consecutive PIVOTs on the same node: second must give 0 reward."""
+        rng = random.Random(42)
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        small_network.get_node(2).session_level = SessionLevel.NONE
+        small_network.get_node(1).session_level = SessionLevel.USER
+        # First PIVOT succeeds
+        r1 = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert r1.success is True
+        assert r1.reward == REWARD_NEW_NODE_COMPROMISED
+        # Second PIVOT on same node fails (node now has session)
+        r2 = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, agent_position=0)
+        assert r2.success is False
+        assert r2.reward == 0.0

@@ -134,7 +134,9 @@ def compute_action_mask(
         ):
             mask[ActionType.CLEAN_LOGS * MAX_NODES + node_id] = True
 
-    # --- WAIT: always valid on the entry node ---
-    mask[ActionType.WAIT * MAX_NODES + network.entry_node_id] = True
+    # --- WAIT: always valid on the agent's current position ---
+    # Using agent_position (not just entry_node_id) ensures the mask is never all-zero
+    # even after Blue Team ROTATE_CREDENTIALS strips all sessions from the entry node.
+    mask[ActionType.WAIT * MAX_NODES + agent_position] = True
 
     return mask
