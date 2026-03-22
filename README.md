@@ -28,7 +28,7 @@ Ce projet est développé en plusieurs phases, chacune ajoutant une couche de co
 | Entraînement RL | **sb3-contrib** `MaskablePPO` | Action masking intégré |
 | Visualisation | **Pygame** | Dashboard live hacker-style |
 | Monitoring | **TensorBoard** | Courbes d'entraînement |
-| Tests | **pytest** | 106 tests, tous verts |
+| Tests | **pytest** | 162 tests, tous verts |
 | Linting | **ruff** | Format + lint |
 
 ---
@@ -49,14 +49,15 @@ attack_defense_rl/
 │   │   ├── action_mask.py        # Masque booléen pour MaskablePPO
 │   │   └── cyber_env.py          # CyberEnv(gymnasium.Env) — env principal
 │   │
-│   ├── visualization/            # Phase 2 (à venir)
+│   ├── visualization/            # Phase 2 (implémenté — minimal)
 │   ├── agents/                   # Phases 3, 4, 6 (à venir)
 │   ├── pcg/                      # Phase 5 (à venir)
 │   └── utils/
 │
 ├── tests/
 │   ├── conftest.py               # Fixtures partagées
-│   └── phase1/                   # 106 tests Phase 1 
+│   ├── phase1/                   # 119 tests Phase 1
+│   └── phase2/                   # 43 tests Phase 2
 │
 ├── scripts/                      # Scripts d'entraînement et d'évaluation (à venir)
 └── models/                       # Modèles sauvegardés (gitignored)
@@ -89,10 +90,10 @@ attack_defense_rl/
 | `BRUTE_FORCE` | Session USER via credentials faibles | +30 |
 | `PRIVESC` | USER → ROOT via vuln privesc | +12 |
 | `CREDENTIAL_DUMP` | Extrait des credentials réutilisables | +15 |
-| `PIVOT` | Accès à un nœud non-adjacent | +5 |
+| `PIVOT` | Accès à un nœud DISCOVERED non-adjacent via relais compromis | +5 |
 | `LATERAL_MOVE` | Accès adjacent via creds dumpés | +8 |
 | `INSTALL_BACKDOOR` | Accès persistant (résiste à ROTATE_CREDENTIALS) | +10 |
-| `EXFILTRATE` | **Objectif principal** — +100 reward | +20 |
+| `EXFILTRATE` | **Objectif principal** — +150 reward (requiert ROOT) | +20 |
 | `TUNNEL` | Chiffrement — divise suspicion future par 2 | +5 |
 | `CLEAN_LOGS` | Efface les traces (diminishing returns) | -15/-10/-5/-2 |
 | `WAIT` | Réduit la suspicion (floor = max_historique / 2) | -3 |
@@ -125,13 +126,13 @@ attack_defense_rl/
 ### Rewards calibrés
 
 ```python
-REWARD_EXFILTRATE           = +100.0
-REWARD_PER_STEP             =   -0.5   # pression temporelle
+REWARD_EXFILTRATE           = +150.0  # ratio = 150 / (0.5 * 200) = 1.5 > 1
+REWARD_PER_STEP             =   -0.5  # pression temporelle
 REWARD_DETECTED             =  -50.0
 REWARD_NEW_NODE_DISCOVERED  =   +2.0
 REWARD_NEW_NODE_COMPROMISED =   +5.0
 REWARD_ROOT_OBTAINED        =  +10.0
-REWARD_REPEATED_ACTION      =   -1.0
+REWARD_REPEATED_ACTION      =   -1.0  # WAIT est exempté
 ```
 
 ---
@@ -176,6 +177,44 @@ print(f"Nœuds découverts: {info['n_discovered']}")
 print(f"Suspicion max: {info['max_suspicion']:.0f}%")
 ```
 
+### Visualiser un épisode (Phase 2 minimale)
+
+```python
+from src.environment.cyber_env import CyberEnv
+
+# Ouvre une fenêtre Pygame et affiche le graphe en temps réel
+env = CyberEnv(seed=42, render_mode="human")
+obs, info = env.reset()
+
+for _ in range(200):
+    action = env.action_space.sample()
+    obs, reward, terminated, truncated, info = env.step(action)
+    env.render()
+    if terminated or truncated:
+        break
+
+env.close()
+```
+
+Le graphe affiche :
+- **Cyan** : nœud énuméré, non compromis
+- **Jaune** : nœud découvert, non énuméré
+- **Rouge** : session USER
+- **Rouge vif** : session ROOT
+- **Gris sombre** : nœud inconnu (Fog of War) ou hors-ligne
+- **Anneau vert** : nœud d'entrée (DMZ)
+- **Anneau gold** : nœud cible (Data Center)
+- **Anneau blanc** : position actuelle de l'agent
+
+Mode headless (pour scripts et tests) :
+
+```python
+env = CyberEnv(seed=42, render_mode="rgb_array")
+obs, info = env.reset()
+frame = env.render()  # np.ndarray (H, W, 3) uint8
+env.close()
+```
+
 ### Tester l'environnement avec gymnasium
 
 ```python
@@ -213,7 +252,7 @@ ruff format src/ tests/
 | Phase | Description | Statut |
 | --- | --- | --- |
 | Phase 1 | Environnement Gymnasium + Fog of War |  Terminé |
-| Phase 2 min | Visualisation minimale Pygame | En attente |
+| Phase 2 min | Visualisation minimale Pygame | Terminé |
 | Phase 3 | Entraînement Red (MaskablePPO) | En attente |
 | Phase 2 complète | Visualisation panels + animations | En attente |
 | Phase 4 | Blue Team scriptée | En attente |

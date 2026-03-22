@@ -60,7 +60,7 @@ class CyberEnv(gym.Env):
         Decoded as: action_type = action // MAX_NODES, target = action % MAX_NODES
     """
 
-    metadata = {"render_modes": ["human"], "render_fps": 10}  # rgb_array added in Phase 2
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 10}
 
     def __init__(
         self,
@@ -124,6 +124,9 @@ class CyberEnv(gym.Env):
         self.episode_reward: float = 0.0
         self.exfiltrated: bool = False
 
+        # Renderer (created lazily on first render() call)
+        self._renderer: Any = None
+
     def _build_adjacency(self) -> np.ndarray:
         """Build the adjacency matrix from the network graph."""
         adj = np.zeros((MAX_NODES, MAX_NODES), dtype=np.float32)
@@ -152,6 +155,11 @@ class CyberEnv(gym.Env):
         # Reset network state
         self.network.reset_all_nodes()
         self._base_adjacency = self._build_adjacency()
+
+        # Invalidate renderer layout so it is recomputed on next render() call.
+        # Needed for Phase 5 (PCG) where topology changes between episodes.
+        if self._renderer is not None:
+            self._renderer.reset_layout()
 
         # Episode state
         self.current_step = 0
@@ -279,6 +287,41 @@ class CyberEnv(gym.Env):
             "agent_position": self.agent_position,
         }
 
-    def render(self) -> None:
-        """Render is a no-op in Phase 1 (visualization comes in Phase 2)."""
-        pass
+    def render(self) -> np.ndarray | None:
+        """Render the current environment state.
+
+        Returns:
+            np.ndarray of shape (H, W, 3) for render_mode="rgb_array", else None.
+        """
+        if self.render_mode is None:
+            return None
+
+        # Lazy import: avoids importing Pygame in training mode (render_mode=None).
+        if self._renderer is None:
+            from src.visualization.renderer import PygameRenderer
+
+            # rgb_array mode renders to an offscreen buffer — no real window needed.
+            self._renderer = PygameRenderer(headless=(self.render_mode == "rgb_array"))
+
+        info = self._get_info()
+        kwargs: dict[str, Any] = {
+            "network": self.network,
+            "agent_position": self.agent_position,
+            "step": info["step"],
+            "episode_reward": info["episode_reward"],
+            "n_compromised": info["n_compromised"],
+            "max_suspicion": info["max_suspicion"],
+        }
+
+        if self.render_mode == "human":
+            self._renderer.update(**kwargs)
+            return None
+        elif self.render_mode == "rgb_array":
+            return self._renderer.get_frame(**kwargs)
+        return None
+
+    def close(self) -> None:
+        """Clean up the renderer and Pygame resources."""
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
