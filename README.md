@@ -28,7 +28,7 @@ Ce projet est développé en plusieurs phases, chacune ajoutant une couche de co
 | Entraînement RL | **sb3-contrib** `MaskablePPO` | Action masking intégré |
 | Visualisation | **Pygame** | Dashboard live hacker-style |
 | Monitoring | **TensorBoard** | Courbes d'entraînement |
-| Tests | **pytest** | 162 tests, tous verts |
+| Tests | **pytest** | 200 tests, tous verts |
 | Linting | **ruff** | Format + lint |
 
 ---
@@ -50,16 +50,23 @@ attack_defense_rl/
 │   │   └── cyber_env.py          # CyberEnv(gymnasium.Env) — env principal
 │   │
 │   ├── visualization/            # Phase 2 (implémenté — minimal)
-│   ├── agents/                   # Phases 3, 4, 6 (à venir)
+│   ├── agents/                   # Phase 3 (implémenté)
+│   │   ├── wrappers.py           # ActionMasker + DummyVecEnv factories
+│   │   ├── red_trainer.py        # MaskablePPO config + train + evaluate
+│   │   └── callbacks.py          # CyberMetricsCallback (TensorBoard)
 │   ├── pcg/                      # Phase 5 (à venir)
 │   └── utils/
 │
 ├── tests/
 │   ├── conftest.py               # Fixtures partagées
 │   ├── phase1/                   # 119 tests Phase 1
-│   └── phase2/                   # 43 tests Phase 2
+│   ├── phase2/                   # 43 tests Phase 2
+│   └── phase3/                   # 33 tests Phase 3
 │
-├── scripts/                      # Scripts d'entraînement et d'évaluation (à venir)
+├── scripts/
+│   ├── train_red.py              # Lancer l'entraînement RL
+│   ├── evaluate.py               # Évaluer un modèle sur N épisodes
+│   └── visualize.py              # Visualisation live (agent aléatoire ou entraîné)
 └── models/                       # Modèles sauvegardés (gitignored)
 ```
 
@@ -215,6 +222,45 @@ frame = env.render()  # np.ndarray (H, W, 3) uint8
 env.close()
 ```
 
+### Entraîner l'agent Red Team (Phase 3)
+
+```bash
+# Entraînement complet (500k steps, ~2h CPU)
+python scripts/train_red.py
+
+# Entraînement court pour tester
+python scripts/train_red.py --timesteps 50000 --eval-freq 5000
+
+# Suivre l'entraînement avec TensorBoard
+tensorboard --logdir logs/
+```
+
+Métriques TensorBoard disponibles :
+
+- `cyber/exfiltration_rate` — taux d'épisodes réussis (objectif principal)
+- `cyber/detection_rate` — taux de détections par la Blue Team
+- `cyber/mean_nodes_compromised`, `cyber/mean_max_suspicion`
+
+### Évaluer un modèle entraîné
+
+```bash
+# Évaluation sur 100 épisodes
+python scripts/evaluate.py models/red_agent_final.zip
+
+# Évaluation avec politique stochastique
+python scripts/evaluate.py models/red_agent_final.zip --episodes 200 --stochastic
+```
+
+### Visualiser un agent entraîné
+
+```bash
+# Visualisation avec agent entraîné (fenêtre Pygame)
+python scripts/visualize.py --model models/red_agent_final.zip --speed 3
+
+# Visualisation avec actions aléatoires (baseline)
+python scripts/visualize.py --speed 3
+```
+
 ### Tester l'environnement avec gymnasium
 
 ```python
@@ -253,7 +299,7 @@ ruff format src/ tests/
 | --- | --- | --- |
 | Phase 1 | Environnement Gymnasium + Fog of War |  Terminé |
 | Phase 2 min | Visualisation minimale Pygame | Terminé |
-| Phase 3 | Entraînement Red (MaskablePPO) | En attente |
+| Phase 3 | Entraînement Red (MaskablePPO) | Terminé |
 | Phase 2 complète | Visualisation panels + animations | En attente |
 | Phase 4 | Blue Team scriptée | En attente |
 | Phase 5 | Génération procédurale (PCG) | En attente |

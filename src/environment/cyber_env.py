@@ -123,6 +123,7 @@ class CyberEnv(gym.Env):
         self.last_action: int | None = None
         self.episode_reward: float = 0.0
         self.exfiltrated: bool = False
+        self._detected: bool = False
 
         # Renderer (created lazily on first render() call)
         self._renderer: Any = None
@@ -167,6 +168,7 @@ class CyberEnv(gym.Env):
         self.last_action = None
         self.episode_reward = 0.0
         self.exfiltrated = False
+        self._detected = False
 
         # Red Team starts at entry node with DISCOVERED status
         entry = self.network.entry_node_id
@@ -235,6 +237,7 @@ class CyberEnv(gym.Env):
         detected = any(n.suspicion_level >= SUSPICION_MAX for n in self.network.nodes.values())
         if detected:
             reward += REWARD_DETECTED
+            self._detected = True
 
         self.episode_reward += reward
 
@@ -284,6 +287,7 @@ class CyberEnv(gym.Env):
             "n_discovered": n_discovered,
             "max_suspicion": max_suspicion,
             "exfiltrated": self.exfiltrated,
+            "detected": self._detected,
             "agent_position": self.agent_position,
         }
 
