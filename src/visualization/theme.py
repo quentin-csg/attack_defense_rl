@@ -13,9 +13,12 @@ WINDOW_TITLE: str = "Attack & Defense RL"
 FPS: int = 10
 
 # ---------------------------------------------------------------------------
-# Background
+# Background gradient
 # ---------------------------------------------------------------------------
-BG_COLOR: tuple[int, int, int] = (26, 26, 46)  # #1a1a2e — dark navy
+BG_COLOR: tuple[int, int, int] = (26, 26, 46)       # #1a1a2e — dark navy (top)
+BG_COLOR_BOTTOM: tuple[int, int, int] = (10, 10, 28) # slightly darker at bottom
+# Subtle radial glow in the graph centre (vignette effect)
+BG_GLOW_COLOR: tuple[int, int, int] = (30, 35, 70)  # blue-purple tint for centre glow
 
 # ---------------------------------------------------------------------------
 # Node fill colors  (applied in priority order — see graph_view.get_node_color)
@@ -57,13 +60,35 @@ COLOR_TEXT_LABEL: tuple[int, int, int] = (160, 160, 160) # gray — node labels
 # ---------------------------------------------------------------------------
 # Sizes
 # ---------------------------------------------------------------------------
-NODE_RADIUS: int = 18
-NODE_RADIUS_UNKNOWN: int = 10    # smaller silhouette for fogged nodes
-AGENT_HALO_RADIUS: int = 27      # radius of the agent halo ring
-SPECIAL_MARKER_RADIUS: int = 24  # radius of entry/target rings
-EDGE_WIDTH: int = 2
+NODE_RADIUS: int = 24
+NODE_RADIUS_UNKNOWN: int = 18    # fog cloud approximate radius
+AGENT_HALO_RADIUS: int = 34      # radius of the agent halo ring
+SPECIAL_MARKER_RADIUS: int = 32  # radius of entry/target rings
+EDGE_WIDTH: int = 1
 MARKER_RING_WIDTH: int = 2       # thickness of special marker rings
 HALO_RING_WIDTH: int = 3         # thickness of each agent halo ring
+
+# Node background circle (dark circle behind each icon)
+NODE_BG_RADIUS: int = 24
+COLOR_NODE_BG: tuple[int, int, int] = (30, 30, 50)
+
+# Node ID number rendered on the node
+FONT_SIZE_NODE_ID: int = 16
+
+# Fog cloud colours
+COLOR_FOG_CLOUD: tuple[int, int, int] = (80, 80, 90)
+COLOR_FOG_CLOUD_DARK: tuple[int, int, int] = (55, 55, 65)
+
+# Compromised glow (RGBA — drawn on SRCALPHA surface)
+GLOW_RADIUS_USER: int = 34
+GLOW_RADIUS_ROOT: int = 40
+COLOR_GLOW_USER: tuple[int, int, int, int] = (204, 0, 0, 50)
+COLOR_GLOW_ROOT: tuple[int, int, int, int] = (255, 34, 34, 70)
+
+# Icon internal detail colours
+COLOR_ICON_SCREEN: tuple[int, int, int] = (20, 20, 35)    # dark screen on monitors
+COLOR_ICON_LED: tuple[int, int, int] = (0, 255, 100)       # green LED dots on server racks
+COLOR_ICON_ANTENNA: tuple[int, int, int] = (140, 140, 160) # antenna lines on routers
 
 # ---------------------------------------------------------------------------
 # Layout — panel widths
@@ -76,7 +101,7 @@ GRAPH_AREA_LEFT: int = LEFT_PANEL_WIDTH
 GRAPH_AREA_TOP: int = 0
 GRAPH_AREA_WIDTH: int = WINDOW_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH  # 810px
 GRAPH_AREA_HEIGHT: int = WINDOW_HEIGHT
-GRAPH_MARGIN: int = 40  # pixels between graph edge nodes and the graph zone border
+GRAPH_MARGIN: int = 55  # pixels between graph edge nodes and the graph zone border
 
 # ---------------------------------------------------------------------------
 # Stats panel (top-left, inside the left sidebar)
@@ -135,8 +160,8 @@ COLOR_LOG_FAILURE: tuple[int, int, int] = (255, 60, 60)      # red    — critic
 # Animations
 # ---------------------------------------------------------------------------
 PULSE_SPEED: float = 3.0        # radians/second for ROOT node pulse
-PULSE_MIN_RADIUS: int = 16
-PULSE_MAX_RADIUS: int = 24
+PULSE_MIN_RADIUS: int = 26
+PULSE_MAX_RADIUS: int = 38
 FLASH_DURATION: float = 0.5     # seconds for exploit/blue-action flash
 ATTACKER_PATH_COLOR: tuple[int, int, int] = (60, 100, 255)   # blue attacker path edges
 ATTACKER_PATH_WIDTH: int = 4
@@ -144,7 +169,7 @@ ATTACKER_PATH_WIDTH: int = 4
 # ---------------------------------------------------------------------------
 # Node icons
 # ---------------------------------------------------------------------------
-ICON_SIZE: int = 28   # bounding box for geometric node icons
+ICON_SIZE: int = 38   # bounding box for geometric node icons
 
 # ---------------------------------------------------------------------------
 # Controls hint

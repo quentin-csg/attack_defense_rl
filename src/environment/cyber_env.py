@@ -290,9 +290,15 @@ class CyberEnv(gym.Env):
 
     def _get_obs(self) -> dict[str, np.ndarray]:
         """Build the current observation."""
+        # Use cached adjacency during normal episodes (no rebuilds → faster training).
+        # Rebuild only when Blue Team has isolated nodes (non-empty isolated_edges dict)
+        # so that removed edges are correctly reflected in the observation.
+        adjacency = (
+            self._build_adjacency() if self.network.isolated_edges else self._base_adjacency
+        )
         return self.fog.build_observation(
             nodes=self.network.nodes,
-            adjacency=self._build_adjacency(),
+            adjacency=adjacency,
             current_step=self.current_step,
             max_steps=self.max_steps,
             num_real_nodes=self.network.num_nodes,

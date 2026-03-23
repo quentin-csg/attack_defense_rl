@@ -38,8 +38,9 @@ def compute_action_mask(
         if node.session_level != SessionLevel.NONE and node.is_online:
             mask[ActionType.SCAN * MAX_NODES + node_id] = True
 
-        # --- ENUMERATE / ENUMERATE_AGGRESSIVE: node must be discovered ---
-        if node.discovery_level >= DiscoveryLevel.DISCOVERED and node.is_online:
+        # --- ENUMERATE / ENUMERATE_AGGRESSIVE: node must be DISCOVERED (not yet ENUMERATED) ---
+        # Re-enumerating an already-ENUMERATED node wastes a step and adds suspicion for nothing.
+        if node.discovery_level == DiscoveryLevel.DISCOVERED and node.is_online:
             mask[ActionType.ENUMERATE * MAX_NODES + node_id] = True
             mask[ActionType.ENUMERATE_AGGRESSIVE * MAX_NODES + node_id] = True
 
@@ -57,9 +58,12 @@ def compute_action_mask(
             if has_exploit_vuln:
                 mask[ActionType.EXPLOIT * MAX_NODES + node_id] = True
 
-        # --- BRUTE_FORCE: node must be discovered + have weak creds + no session ---
+        # --- BRUTE_FORCE: node must be ENUMERATED + have weak creds + no session ---
+        # Requires ENUMERATED (not just DISCOVERED) to avoid leaking has_weak_credentials
+        # through the fog of war: MaskablePPO sees the mask, so a DISCOVERED-only check
+        # would let the agent infer weak creds without having scanned the node.
         if (
-            node.discovery_level >= DiscoveryLevel.DISCOVERED
+            node.discovery_level == DiscoveryLevel.ENUMERATED
             and node.is_online
             and node.session_level == SessionLevel.NONE
             and node.has_weak_credentials
@@ -78,8 +82,14 @@ def compute_action_mask(
             if has_privesc:
                 mask[ActionType.PRIVESC * MAX_NODES + node_id] = True
 
-        # --- CREDENTIAL_DUMP: need at least USER session ---
-        if node.session_level != SessionLevel.NONE and node.is_online:
+        # --- CREDENTIAL_DUMP: need at least USER session, creds not yet dumped ---
+        # Once has_dumped_creds is True there is no benefit to dumping again —
+        # masking prevents the agent from wasting steps and accumulating suspicion.
+        if (
+            not has_dumped_creds
+            and node.session_level != SessionLevel.NONE
+            and node.is_online
+        ):
             mask[ActionType.CREDENTIAL_DUMP * MAX_NODES + node_id] = True
 
         # --- PIVOT: target must be DISCOVERED (not UNKNOWN to avoid FoW leak)

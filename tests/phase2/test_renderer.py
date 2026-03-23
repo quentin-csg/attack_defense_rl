@@ -345,9 +345,9 @@ class TestPygameRenderer:
         if renderer._panel_header_rects:
             name, rect = next(iter(renderer._panel_header_rects.items()))
             assert renderer._panel_expanded[name] is False
-            renderer._handle_panel_click(rect.center)
+            renderer._handle_left_click(rect.center)
             assert renderer._panel_expanded[name] is True
-            renderer._handle_panel_click(rect.center)
+            renderer._handle_left_click(rect.center)
             assert renderer._panel_expanded[name] is False
 
     def test_flash_event_added_on_success(self, renderer, fixed_network) -> None:

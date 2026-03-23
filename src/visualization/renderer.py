@@ -29,12 +29,16 @@ from src.visualization.graph_view import (
     compute_layout,
     draw_agent_halo,
     draw_attacker_path,
+    draw_background,
     draw_edges,
     draw_flash_effect,
     draw_node_icons,
+    draw_node_info_panel,
     draw_node_labels,
     draw_pulse_effect,
+    draw_selected_ring,
     draw_special_markers,
+    find_node_at,
     fog_node_ids,
 )
 from src.visualization.ui_panels import (
@@ -112,6 +116,16 @@ class PygameRenderer:
         # Dashboard controls (pause, speed) — owned by the renderer so that
         # it is the single consumer of the Pygame event queue.
         self._controls: DashboardControls = DashboardControls()
+
+        # Graph pan state
+        self._drag_offset: list[int] = [0, 0]       # [dx, dy] offset applied to layout
+        self._drag_active: bool = False
+        self._drag_last_pos: tuple[int, int] | None = None
+
+        # Selected node (click to inspect)
+        self._selected_node: int | None = None
+        # Snapshot of the network state for drawing the info panel
+        self._last_state: RenderState | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -217,22 +231,54 @@ class PygameRenderer:
             if state.last_action_target not in flashing_ids:
                 self._flash_events.append((state.last_action_target, theme.FLASH_DURATION))
 
+    def _effective_layout(self) -> NodePositions:
+        """Return layout positions shifted by the current pan offset."""
+        if self._layout is None:
+            return {}
+        ox, oy = self._drag_offset
+        return {nid: (px + ox, py + oy) for nid, (px, py) in self._layout.items()}
+
     def _handle_events(self) -> None:
         """Process the Pygame event queue."""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self._open = False
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self._handle_panel_click(event.pos)
+                self._handle_left_click(event.pos)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self._drag_active = False
+                self._drag_last_pos = None
+            elif event.type == pygame.MOUSEMOTION:
+                if self._drag_active and self._drag_last_pos is not None:
+                    dx = event.pos[0] - self._drag_last_pos[0]
+                    dy = event.pos[1] - self._drag_last_pos[1]
+                    self._drag_offset[0] += dx
+                    self._drag_offset[1] += dy
+                    self._drag_last_pos = event.pos
             elif event.type == pygame.KEYDOWN:
                 self._handle_key(event.key)
 
-    def _handle_panel_click(self, pos: tuple[int, int]) -> None:
-        """Toggle a panel if its header was clicked."""
+    def _handle_left_click(self, pos: tuple[int, int]) -> None:
+        """Handle a left-click: panel header toggle, node select, or pan start."""
+        # 1. Check sidebar panel headers (highest priority)
         for name, rect in self._panel_header_rects.items():
             if rect.collidepoint(pos):
                 self._panel_expanded[name] = not self._panel_expanded[name]
-                break
+                return
+
+        # 2. Check node hit (in graph zone only)
+        eff = self._effective_layout()
+        hit = find_node_at(eff, pos)
+        if hit is not None:
+            # Toggle: clicking same node deselects it
+            self._selected_node = None if self._selected_node == hit else hit
+            return
+
+        # 3. Click on background → start pan drag (only in graph zone)
+        if pos[0] > theme.LEFT_PANEL_WIDTH and pos[0] < theme.WINDOW_WIDTH - theme.RIGHT_PANEL_WIDTH:
+            self._selected_node = None  # deselect on background click
+            self._drag_active = True
+            self._drag_last_pos = pos
 
     def _handle_key(self, key: int) -> None:
         """Handle keyboard shortcuts (ESC + DashboardControls keys)."""
@@ -247,23 +293,41 @@ class PygameRenderer:
         """Draw one complete frame onto the given surface (back-to-front)."""
         assert self._layout is not None  # _ensure_layout must be called first
 
-        surface.fill(theme.BG_COLOR)
+        self._last_state = state
+        layout = self._effective_layout()
+
+        draw_background(surface)
         fogged = fog_node_ids(state.network)
 
         # --- Graph zone (centre) ---
-        draw_edges(surface, state.network.graph, self._layout, fogged)
-        draw_attacker_path(surface, state.attacker_path, self._layout)
-        draw_node_icons(surface, state.network, self._layout, fogged)
-        draw_pulse_effect(surface, state.network, self._layout, self._anim_time)
-        draw_flash_effect(surface, self._flash_events, self._layout)
-        draw_agent_halo(surface, state.agent_position, self._layout)
+        draw_edges(surface, state.network.graph, layout, fogged)
+        draw_attacker_path(surface, state.attacker_path, layout)
+        draw_node_icons(surface, state.network, layout, fogged)
+        draw_pulse_effect(surface, state.network, layout, self._anim_time)
+        draw_flash_effect(surface, self._flash_events, layout)
+        draw_agent_halo(surface, state.agent_position, layout)
         draw_special_markers(
             surface,
             state.network.entry_node_id,
             state.network.target_node_id,
-            self._layout,
+            layout,
         )
-        draw_node_labels(surface, self._layout, self._font_label)
+        draw_node_labels(surface, layout, self._font_label)
+
+        # --- Selected node ring + info panel ---
+        if self._selected_node is not None and self._selected_node in state.network.nodes:
+            draw_selected_ring(surface, self._selected_node, layout)
+            if self._selected_node in layout:
+                px, py = layout[self._selected_node]
+                draw_node_info_panel(
+                    surface,
+                    state.network.nodes[self._selected_node],
+                    self._selected_node,
+                    px, py,
+                    self._font_panel_header,
+                    self._font_panel_body,
+                    surface.get_width(),
+                )
 
         # --- Stats panel (top-left) ---
         stats_rect = pygame.Rect(*theme.STATS_PANEL_RECT)
@@ -286,7 +350,7 @@ class PygameRenderer:
 
         # --- Controls hint (bottom centre) ---
         hint = self._font_log.render(
-            "ESC=quit  click panel=expand",
+            "ESC=quit  drag=pan  click node=info  SPACE=pause  +/-=speed",
             True,
             theme.COLOR_HINT,
         )

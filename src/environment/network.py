@@ -111,62 +111,108 @@ class Network:
 
 
 def build_fixed_network(seed: int | None = None) -> Network:
-    """Build a fixed 8-node network for Phase 1 development.
+    """Build a fixed 8-node enterprise network for Phase 1 development.
 
-    Topology:
-        0 (entry/DMZ) -- 1 -- 3 -- 5 -- 7 (target/DC)
-              |          |    |    |
-              2          4    6    |
-                                   6
+    Topology (logical zones):
 
-    Node 0 = DMZ entry point (discovered at start)
-    Node 7 = Data Center (exfiltration target, has_loot=True)
+        [Internet / Attacker]
+                |
+        Node 0: WEB SERVER (LINUX) — public-facing entry point
+                |
+        Node 1: FIREWALL (NETWORK_DEVICE) — DMZ perimeter
+              /       \\
+        Node 2        Node 3: CORE ROUTER (NETWORK_DEVICE)
+        Mail Server     /     |     \\
+        (LINUX)      Node 4  Node 5  Node 6
+        DMZ          PC HR   PC Dev  App Server
+                     (WIN)   (WIN)   (LINUX)
+                                         |
+                                     Node 7: DATABASE (LINUX)
+                                     (Data Center — TARGET)
+
+    Zones:
+        Internet/DMZ : 0 (Web Server — internet-facing)
+        DMZ          : 1 (Firewall), 2 (Mail Server)
+        Corp LAN     : 3 (Core Router), 4 (PC HR), 5 (PC Dev)
+        Server VLAN  : 6 (App Server)
+        Data Center  : 7 (Database — has_loot)
+
+    Attack paths:
+        Web  : 0 (Log4Shell) → 1 (Shellshock) → 3 → 6 (Log4Shell) → 7 (Baron Samedit) → exfil
+        Mail : 0 → 1 → 2 (brute weak_creds)   → 1 → 3 → 4 (EternalBlue) → ... → 7
+        Dev  : 0 → 1 → 3 (SSRF) → 5 (EternalBlue + PrintNightmare) → ... → 7
     """
     net = Network()
 
     # Node definitions: (id, os_type, services, vulns, has_loot, has_weak_creds)
     node_specs: list[tuple[int, OsType, list[Service], list[str], bool, bool]] = [
+        # --- Internet-facing (entry point) ---
         (
             0,
-            OsType.NETWORK_DEVICE,
-            [Service("ssh", 22), Service("http", 80)],
-            ["rce_web"],
+            OsType.LINUX,
+            [Service("ssh", 22), Service("http", 80), Service("https", 443)],
+            ["rce_log4shell", "sqli_union_bypass"],
             False,
             False,
         ),
-        (1, OsType.LINUX, [Service("ssh", 22), Service("http", 8080)], ["sqli_basic"], False, True),
+        # --- DMZ ---
+        (
+            1,
+            OsType.NETWORK_DEVICE,
+            [Service("ssh", 22), Service("https", 443)],
+            ["rce_shellshock"],
+            False,
+            False,
+        ),
         (
             2,
-            OsType.WINDOWS,
-            [Service("smb", 445), Service("rdp", 3389)],
-            ["rce_generic"],
+            OsType.LINUX,
+            [Service("ssh", 22), Service("smtp", 25), Service("imap", 993)],
+            ["sqli_blind_time"],
             False,
-            False,
+            True,   # weak creds on mail server (common in real life)
         ),
+        # --- Corp LAN ---
         (
             3,
-            OsType.LINUX,
-            [Service("ssh", 22), Service("mysql", 3306)],
-            ["sqli_basic", "privesc_kernel"],
+            OsType.NETWORK_DEVICE,
+            [Service("ssh", 22), Service("snmp", 161)],
+            ["ssrf_metadata"],
             False,
             False,
         ),
-        (4, OsType.WINDOWS, [Service("smb", 445)], ["weak_credentials"], False, True),
+        (
+            4,
+            OsType.WINDOWS,
+            [Service("smb", 445), Service("rdp", 3389)],
+            ["rce_eternal_blue"],
+            False,
+            True,   # HR workstation — weak credentials
+        ),
         (
             5,
-            OsType.LINUX,
-            [Service("ssh", 22), Service("http", 443)],
-            ["rce_web", "privesc_suid"],
+            OsType.WINDOWS,
+            [Service("smb", 445), Service("rdp", 3389), Service("http", 8080)],
+            ["rce_eternal_blue", "privesc_print_nightmare"],
             False,
             False,
         ),
-        (6, OsType.NETWORK_DEVICE, [Service("snmp", 161)], ["url_injection"], False, False),
+        # --- Server VLAN ---
+        (
+            6,
+            OsType.LINUX,
+            [Service("ssh", 22), Service("http", 8443), Service("mysql", 3306)],
+            ["rce_log4shell", "privesc_docker_escape"],
+            False,
+            False,
+        ),
+        # --- Data Center ---
         (
             7,
             OsType.LINUX,
-            [Service("ssh", 22), Service("nfs", 2049), Service("http", 8443)],
-            ["privesc_misconfig"],
-            True,
+            [Service("ssh", 22), Service("nfs", 2049), Service("postgres", 5432)],
+            ["privesc_sudo_baron"],
+            True,   # exfiltration target
             False,
         ),
     ]
@@ -182,8 +228,17 @@ def build_fixed_network(seed: int | None = None) -> Network:
         )
         net.add_node(node)
 
-    # Edges (connected topology)
-    edges = [(0, 1), (0, 2), (1, 3), (1, 4), (3, 5), (3, 6), (5, 6), (5, 7)]
+    # Edges — enterprise logical connections
+    edges = [
+        (0, 1),  # Web Server → Firewall (internet → DMZ)
+        (1, 2),  # Firewall → Mail Server (DMZ)
+        (1, 3),  # Firewall → Core Router (DMZ → Corp LAN)
+        (3, 4),  # Core Router → PC HR
+        (3, 5),  # Core Router → PC Dev
+        (3, 6),  # Core Router → App Server (Corp LAN → Server VLAN)
+        (4, 5),  # Workstations on same LAN segment
+        (6, 7),  # App Server → Database (Server VLAN → Data Center)
+    ]
     for a, b in edges:
         net.add_edge(a, b)
 

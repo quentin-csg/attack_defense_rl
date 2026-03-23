@@ -276,7 +276,8 @@ def _execute_exploit(
     # Clamp fail_prob so success + crash + fail = 1 even if success_rate > 0.95
     fail_prob = max(0.0, 1.0 - vuln.success_rate - EXPLOIT_CRASH_RATE)
     if roll < EXPLOIT_CRASH_RATE:
-        # Crash — service goes down, detectable trace
+        # Crash — leaves a detectable trace (service error in logs); is_online stays True
+        # (the service may restart; the trace is what matters for Blue Team patrols)
         node.detectable_traces.add("EXPLOIT_CRASH")
         return ActionResult(
             success=False,
@@ -427,7 +428,7 @@ def _execute_pivot(
     """PIVOT: access a discovered non-adjacent node via a compromised intermediary.
 
     Grants a USER session on the target node and elevates discovery to ENUMERATED.
-    After Fix 12: targets DISCOVERED (not UNKNOWN) nodes to avoid FoW leaks.
+    Requires the target to be reachable within 2 hops from any compromised node.
     """
     node = network.get_node(target_id)
 
@@ -438,6 +439,27 @@ def _execute_pivot(
             reward=0.0,
             suspicion_delta=0.0,
             info={"action": "PIVOT", "target": target_id, "reason": "already_compromised"},
+        )
+
+    # Defence-in-depth: verify reachability from a compromised node (2-hop max).
+    # The action mask normally enforces this, but a direct handler call must also be safe.
+    reachable = False
+    for comp_id, comp_node in network.nodes.items():
+        if comp_node.session_level != SessionLevel.NONE:
+            neighbors = network.get_neighbors(comp_id)
+            for neighbor_id in neighbors:
+                if neighbor_id == target_id or target_id in network.get_neighbors(neighbor_id):
+                    reachable = True
+                    break
+        if reachable:
+            break
+
+    if not reachable:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "PIVOT", "target": target_id, "reason": "not_reachable"},
         )
 
     susp = _apply_suspicion(node, SUSPICION_PIVOT, network)

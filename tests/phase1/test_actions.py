@@ -308,6 +308,27 @@ class TestPivot:
         result = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, 0)
         assert result.success is True
 
+    def test_pivot_handler_rejects_unreachable_node(self, small_network: Network) -> None:
+        """Defence-in-depth: PIVOT handler itself must reject nodes not reachable
+        from any compromised node within 2 hops, even if called directly."""
+        # Topology: 0-1-2-3-4. Only node 0 is compromised.
+        small_network.get_node(0).session_level = SessionLevel.USER
+        # Node 4 is 4 hops away — out of 2-hop range
+        small_network.get_node(4).discovery_level = DiscoveryLevel.DISCOVERED
+        rng = random.Random(42)
+        result = execute_action(ActionType.PIVOT, 4, small_network, 1, rng, 0)
+        assert result.success is False
+        assert result.info.get("reason") == "not_reachable"
+
+    def test_pivot_handler_accepts_2hop_node(self, small_network: Network) -> None:
+        """PIVOT handler allows a node exactly 2 hops away from a compromised node."""
+        # 0(compromised) -1hop- 1 -2hop- 2
+        small_network.get_node(0).session_level = SessionLevel.USER
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        rng = random.Random(42)
+        result = execute_action(ActionType.PIVOT, 2, small_network, 1, rng, 0)
+        assert result.success is True
+
 
 class TestLateralMove:
     def test_lateral_move(self, small_network: Network) -> None:

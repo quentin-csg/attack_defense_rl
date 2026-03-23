@@ -207,3 +207,46 @@ class TestActionMask:
         assert mask[ActionType.BRUTE_FORCE * MAX_NODES + 2] is np.True_
         # Node 1 does not -> blocked
         assert mask[ActionType.BRUTE_FORCE * MAX_NODES + 1] is np.False_
+
+    def test_brute_force_requires_enumerated_not_just_discovered(
+        self, small_network: Network
+    ) -> None:
+        """BRUTE_FORCE must be blocked on DISCOVERED (non-ENUMERATED) nodes even if they
+        have weak credentials — otherwise the agent could infer weak_creds via the mask
+        before enumerating (fog-of-war leak)."""
+        # Node 2 has weak_credentials=True but only DISCOVERED (not ENUMERATED)
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        mask = compute_action_mask(small_network, current_step=0, agent_position=0)
+        assert mask[ActionType.BRUTE_FORCE * MAX_NODES + 2] is np.False_
+
+        # Once ENUMERATED, the action is allowed
+        small_network.get_node(2).discovery_level = DiscoveryLevel.ENUMERATED
+        mask = compute_action_mask(small_network, current_step=0, agent_position=0)
+        assert mask[ActionType.BRUTE_FORCE * MAX_NODES + 2] is np.True_
+
+    def test_enumerate_blocked_if_already_enumerated(self, small_network: Network) -> None:
+        """Re-enumerating an already-ENUMERATED node is wasteful and must be blocked."""
+        node = small_network.get_node(1)
+        node.discovery_level = DiscoveryLevel.ENUMERATED
+        mask = compute_action_mask(small_network, current_step=0, agent_position=0)
+        assert mask[ActionType.ENUMERATE * MAX_NODES + 1] is np.False_
+        assert mask[ActionType.ENUMERATE_AGGRESSIVE * MAX_NODES + 1] is np.False_
+
+    def test_credential_dump_blocked_if_already_dumped(self, small_network: Network) -> None:
+        """Once creds have been dumped (has_dumped_creds=True), CREDENTIAL_DUMP must be
+        masked on all nodes — there is no benefit to dumping again."""
+        small_network.get_node(0).session_level = SessionLevel.USER
+        # Before dump: allowed
+        mask = compute_action_mask(
+            small_network, current_step=0, agent_position=0, has_dumped_creds=False
+        )
+        assert mask[ActionType.CREDENTIAL_DUMP * MAX_NODES + 0] is np.True_
+
+        # After dump: blocked everywhere
+        mask = compute_action_mask(
+            small_network, current_step=0, agent_position=0, has_dumped_creds=True
+        )
+        cred_dump_slice = mask[
+            ActionType.CREDENTIAL_DUMP * MAX_NODES : (ActionType.CREDENTIAL_DUMP + 1) * MAX_NODES
+        ]
+        assert not cred_dump_slice.any()
