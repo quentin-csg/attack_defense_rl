@@ -7,11 +7,20 @@ save, load, and evaluate the Red Team agent.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from sb3_contrib import MaskablePPO
+
+# Disable PyTorch distribution validation globally.
+# With 700 masked actions (14 × 50), the masked softmax can produce probabilities
+# that sum to 1.0 ± 1e-7 due to float32 precision, which fails PyTorch's Simplex
+# constraint check. This is a known sb3-contrib issue — disabling validate_args
+# removes the check without affecting training correctness.
+torch.distributions.Distribution.set_default_validate_args(False)
 
 from src.agents.callbacks import build_callback_list
 from src.agents.wrappers import make_masked_env
@@ -35,6 +44,11 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """Linear learning rate schedule: LR decays from initial_value to 0."""
+    return lambda progress_remaining: initial_value * progress_remaining
+
+
 def create_model(
     env: Any,
     log_dir: str | None = None,
@@ -53,7 +67,7 @@ def create_model(
     return MaskablePPO(
         "MultiInputPolicy",
         env,
-        learning_rate=RL_LEARNING_RATE,
+        learning_rate=linear_schedule(RL_LEARNING_RATE),
         n_steps=RL_N_STEPS,
         batch_size=RL_BATCH_SIZE,
         n_epochs=RL_N_EPOCHS,

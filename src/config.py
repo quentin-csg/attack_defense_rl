@@ -108,7 +108,7 @@ RL_LEARNING_RATE: float = 3e-4
 RL_N_STEPS: int = 2048          # rollout buffer size — must satisfy N_STEPS % BATCH_SIZE == 0
 RL_BATCH_SIZE: int = 64         # minibatch size (2048 / 64 = 32 minibatches)
 RL_N_EPOCHS: int = 10           # passes over the rollout buffer per update
-RL_ENT_COEF: float = 0.01       # entropy bonus — encourages exploration
+RL_ENT_COEF: float = 0.05       # entropy bonus — encourages exploration (higher to prevent Simplex crash)
 RL_GAMMA: float = 0.99          # discount factor
 RL_CLIP_RANGE: float = 0.2      # PPO clipping parameter
 RL_NET_ARCH: tuple[int, ...] = (256, 256)  # hidden layers for policy + value networks
