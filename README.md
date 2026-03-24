@@ -288,7 +288,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 
 ```bash
 ruff check src/ tests/
-ruff format src/ tests/
+ruff format src/ tests/ 
 ```
 
 ---
