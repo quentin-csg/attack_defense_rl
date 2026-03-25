@@ -76,6 +76,30 @@ class TestEnums:
         assert SessionLevel.USER.value == 1
         assert SessionLevel.ROOT.value == 2
 
+    def test_reset_session_clears_tunnel(self) -> None:
+        """reset_session() must also clear has_tunnel — a tunnel without a session
+        is invalid and would grant unfair suspicion discounts after credential rotation."""
+        node = Node(node_id=0, os_type=OsType.LINUX)
+        node.session_level = SessionLevel.USER
+        node.has_tunnel = True
+
+        node.reset_session()
+
+        assert node.session_level == SessionLevel.NONE
+        assert node.has_tunnel is False
+
+    def test_reset_session_preserves_tunnel_with_backdoor(self) -> None:
+        """A backdoor protects both session and tunnel from credential rotation."""
+        node = Node(node_id=0, os_type=OsType.LINUX)
+        node.session_level = SessionLevel.USER
+        node.has_backdoor = True
+        node.has_tunnel = True
+
+        node.reset_session()
+
+        assert node.session_level == SessionLevel.USER  # backdoor preserved session
+        assert node.has_tunnel is True                  # backdoor preserved tunnel
+
     def test_discovery_levels(self) -> None:
         assert DiscoveryLevel.UNKNOWN.value == 0
         assert DiscoveryLevel.DISCOVERED.value == 1

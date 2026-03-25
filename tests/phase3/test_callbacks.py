@@ -88,5 +88,5 @@ class TestBuildCallbackList:
             eval_freq=500,
             eval_episodes=2,
         )
-        assert len(cb_list.callbacks) == 3
+        assert len(cb_list.callbacks) == 3  # CyberMetrics, Dashboard, Eval (no Checkpoint when save_dir=None)
         eval_env.close()

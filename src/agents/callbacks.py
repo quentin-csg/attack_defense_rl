@@ -4,11 +4,17 @@ Provides domain-specific TensorBoard metrics beyond what SB3 logs by default:
 - Exfiltration rate (primary objective success)
 - Detection rate (primary failure mode)
 - Nodes compromised, max suspicion, episode reward, episode length
+
+Also provides DashboardCallback that writes metrics to a JSONL file for the
+Streamlit training dashboard.
 """
 
 from __future__ import annotations
 
 import collections
+import json
+import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -90,6 +96,110 @@ class CyberMetricsCallback(BaseCallback):
         return True  # do not stop training
 
 
+class DashboardCallback(BaseCallback):
+    """Write per-episode and per-update metrics to a JSONL file.
+
+    The Streamlit dashboard reads this file for live and replay modes.
+    Two event types are written:
+
+    - ``{"type": "episode", "timestep": N, ...cyber metrics...}``
+      Written at the end of each episode.
+    - ``{"type": "update", "timestep": N, ...train metrics...}``
+      Written after each PPO policy update (entropy, losses, KL, etc.).
+
+    Args:
+        log_path: Path to the JSONL output file. Opened in append mode so
+                  successive training runs accumulate in the same file.
+                  Use ``reset_on_start=True`` to truncate instead.
+        reset_on_start: If True, truncate the file at training start.
+    """
+
+    def __init__(
+        self,
+        log_path: str = "logs/dashboard_metrics.jsonl",
+        reset_on_start: bool = False,
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(verbose)
+        self._log_path = Path(log_path)
+        self._reset_on_start = reset_on_start
+        self._file: Any = None
+        self._last_update_timestep: int = -1
+
+    def _on_training_start(self) -> None:
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "w" if self._reset_on_start else "a"
+        self._file = self._log_path.open(mode, buffering=1)  # line-buffered
+
+    def _on_step(self) -> bool:
+        dones: np.ndarray = self.locals.get("dones", [])
+        infos: list[dict[str, Any]] = self.locals.get("infos", [])
+
+        for done, info in zip(dones, infos, strict=False):
+            if not done:
+                continue
+
+            terminal_info: dict[str, Any] = info.get("terminal_info", info)
+
+            exfiltrated = bool(terminal_info.get("exfiltrated", False))
+            detected = bool(
+                terminal_info.get(
+                    "detected", not exfiltrated and terminal_info.get("max_suspicion", 0) >= 100.0
+                )
+            )
+            record: dict[str, Any] = {
+                "type": "episode",
+                "timestep": int(self.num_timesteps),
+                "wall_time": time.time(),
+                "exfiltrated": exfiltrated,
+                "detected": detected,
+                "n_compromised": float(terminal_info.get("n_compromised", 0)),
+                "max_suspicion": float(terminal_info.get("max_suspicion", 0.0)),
+                "episode_length": float(terminal_info.get("step", 0)),
+                "episode_reward": float(terminal_info.get("episode_reward", 0.0)),
+                "per_node_suspicion": {
+                    str(k): float(v)
+                    for k, v in terminal_info.get("per_node_suspicion", {}).items()
+                },
+            }
+            self._write(record)
+
+        # Capture train metrics from logger after each PPO update.
+        # SB3 flushes name_to_value after dump() — check by timestep change.
+        if self.num_timesteps != self._last_update_timestep:
+            name_to_value: dict[str, Any] = getattr(self.model.logger, "name_to_value", {})
+            train_keys = {
+                "train/entropy_loss",
+                "train/policy_gradient_loss",
+                "train/value_loss",
+                "train/approx_kl",
+                "train/clip_fraction",
+                "train/explained_variance",
+                "train/learning_rate",
+            }
+            train_data = {k.replace("train/", ""): float(v) for k, v in name_to_value.items() if k in train_keys}
+            if train_data:
+                update_record: dict[str, Any] = {
+                    "type": "update",
+                    "timestep": int(self.num_timesteps),
+                    "wall_time": time.time(),
+                    **train_data,
+                }
+                self._write(update_record)
+                self._last_update_timestep = self.num_timesteps
+
+        return True
+
+    def _on_training_end(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+    def _write(self, record: dict[str, Any]) -> None:
+        if self._file is not None:
+            self._file.write(json.dumps(record) + "\n")
+
+
 def build_callback_list(
     eval_env: Any,
     log_dir: str | None,
@@ -97,6 +207,8 @@ def build_callback_list(
     save_freq: int,
     eval_freq: int,
     eval_episodes: int,
+    dashboard_log_path: str = "logs/dashboard_metrics.jsonl",
+    reset_dashboard: bool = False,
 ) -> CallbackList:
     """Compose the standard Phase 3 callback stack.
 
@@ -111,12 +223,15 @@ def build_callback_list(
         save_freq: Save a checkpoint every this many env steps.
         eval_freq: Run evaluation every this many env steps.
         eval_episodes: Number of episodes per evaluation run.
+        dashboard_log_path: Path for the JSONL dashboard metrics file.
+        reset_dashboard: If True, truncate the JSONL file at training start.
 
     Returns:
-        CallbackList containing CyberMetricsCallback + MaskableEvalCallback +
-        CheckpointCallback.
+        CallbackList containing CyberMetricsCallback + DashboardCallback +
+        MaskableEvalCallback + CheckpointCallback.
     """
     cyber_metrics = CyberMetricsCallback(verbose=0)
+    dashboard = DashboardCallback(log_path=dashboard_log_path, reset_on_start=reset_dashboard)
 
     eval_callback = MaskableEvalCallback(
         eval_env,
@@ -129,11 +244,16 @@ def build_callback_list(
         verbose=0,
     )
 
-    checkpoint_callback = CheckpointCallback(
-        save_freq=save_freq,
-        save_path=save_dir or "models/",
-        name_prefix="red_agent",
-        verbose=0,
-    )
+    callbacks: list[Any] = [cyber_metrics, dashboard, eval_callback]
 
-    return CallbackList([cyber_metrics, eval_callback, checkpoint_callback])
+    if save_dir is not None:
+        callbacks.append(
+            CheckpointCallback(
+                save_freq=save_freq,
+                save_path=save_dir,
+                name_prefix="red_agent",
+                verbose=0,
+            )
+        )
+
+    return CallbackList(callbacks)

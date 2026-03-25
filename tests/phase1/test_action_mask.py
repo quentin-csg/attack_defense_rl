@@ -232,6 +232,39 @@ class TestActionMask:
         assert mask[ActionType.ENUMERATE * MAX_NODES + 1] is np.False_
         assert mask[ActionType.ENUMERATE_AGGRESSIVE * MAX_NODES + 1] is np.False_
 
+    def test_pivot_blocked_from_isolated_compromised_node(self, small_network: Network) -> None:
+        """PIVOT must not be allowed via a compromised node that is offline (isolated by Blue Team).
+        Without this check, Blue Team ISOLATE would be partially ineffective."""
+        # Setup: node 1 is compromised, node 2 is discovered — PIVOT to 2 should be valid
+        small_network.get_node(1).session_level = SessionLevel.USER
+        small_network.get_node(1).is_online = True
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        mask = compute_action_mask(small_network, current_step=0, agent_position=0)
+        assert mask[ActionType.PIVOT * MAX_NODES + 2] is np.True_
+
+        # Blue Team isolates node 1 -> PIVOT via node 1 must now be blocked
+        small_network.get_node(1).is_online = False
+        mask = compute_action_mask(small_network, current_step=0, agent_position=0)
+        assert mask[ActionType.PIVOT * MAX_NODES + 2] is np.False_
+
+    def test_lateral_move_blocked_from_isolated_compromised_node(self, small_network: Network) -> None:
+        """LATERAL_MOVE must not be allowed from a compromised node that is offline."""
+        # Setup: node 1 compromised + online, creds dumped, node 2 discovered
+        small_network.get_node(1).session_level = SessionLevel.USER
+        small_network.get_node(1).is_online = True
+        small_network.get_node(2).discovery_level = DiscoveryLevel.DISCOVERED
+        mask = compute_action_mask(
+            small_network, current_step=0, agent_position=0, has_dumped_creds=True
+        )
+        assert mask[ActionType.LATERAL_MOVE * MAX_NODES + 2] is np.True_
+
+        # Blue Team isolates node 1 -> LATERAL_MOVE via node 1 must now be blocked
+        small_network.get_node(1).is_online = False
+        mask = compute_action_mask(
+            small_network, current_step=0, agent_position=0, has_dumped_creds=True
+        )
+        assert mask[ActionType.LATERAL_MOVE * MAX_NODES + 2] is np.False_
+
     def test_credential_dump_blocked_if_already_dumped(self, small_network: Network) -> None:
         """Once creds have been dumped (has_dumped_creds=True), CREDENTIAL_DUMP must be
         masked on all nodes — there is no benefit to dumping again."""

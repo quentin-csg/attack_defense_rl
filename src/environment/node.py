@@ -101,6 +101,12 @@ class Node:
         )
 
     def reset_session(self) -> None:
-        """Reset Red Team session (used by ROTATE_CREDENTIALS)."""
+        """Reset Red Team session (used by ROTATE_CREDENTIALS).
+
+        A backdoor protects the session from rotation. A tunnel is also torn
+        down unless a backdoor shields it — without an active session, the
+        tunnel has no carrier and would grant suspicion discounts unfairly.
+        """
         if not self.has_backdoor:
             self.session_level = SessionLevel.NONE
+            self.has_tunnel = False

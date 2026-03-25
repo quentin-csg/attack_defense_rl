@@ -1,16 +1,17 @@
 """Train the Red Team agent with MaskablePPO.
 
 Usage:
-    python scripts/train_red.py                            # defaults (500k steps)
-    python scripts/train_red.py --timesteps 100000         # shorter run
-    python scripts/train_red.py --seed 123 --log-dir logs/run2
-    python scripts/train_red.py --timesteps 1000000 --save-dir models/long_run
+    python scripts/train_red.py                               # defaults (500k steps)
+    python scripts/train_red.py --timesteps 100000            # shorter run
+    python scripts/train_red.py --run-name my_exp             # named run
+    python scripts/train_red.py --timesteps 1000000 --run-name long_run
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -38,13 +39,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
-        "--log-dir", type=str, default="logs/", help="TensorBoard log directory (default: logs/)"
+        "--run-name",
+        type=str,
+        default=None,
+        help="Run name — creates logs/{run_name}/ and models/{run_name}/. "
+             "Defaults to a timestamp (run_YYYYMMDD_HHMMSS).",
+    )
+    parser.add_argument(
+        "--log-dir", type=str, default=None,
+        help="TensorBoard log directory. Overrides --run-name if set.",
     )
     parser.add_argument(
         "--save-dir",
         type=str,
-        default="models/",
-        help="Model checkpoint directory (default: models/)",
+        default=None,
+        help="Model checkpoint directory. Overrides --run-name if set.",
     )
     parser.add_argument(
         "--eval-freq",
@@ -70,15 +79,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    print(f"Training Red Team agent | timesteps={args.timesteps:,} | seed={args.seed}")
-    print(f"Logs -> {args.log_dir}  |  Models -> {args.save_dir}")
-    print(f"TensorBoard: tensorboard --logdir {args.log_dir}\n")
+    # Resolve run directories — explicit flags override --run-name
+    run_name = args.run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    log_dir = args.log_dir or f"logs/{run_name}"
+    save_dir = args.save_dir or f"models/{run_name}"
+
+    print(f"Training Red Team agent | run={run_name} | timesteps={args.timesteps:,} | seed={args.seed}")
+    print(f"Logs -> {log_dir}  |  Models -> {save_dir}")
+    print(f"TensorBoard: tensorboard --logdir {log_dir}\n")
 
     model = train(
         total_timesteps=args.timesteps,
         seed=args.seed,
-        log_dir=args.log_dir,
-        save_dir=args.save_dir,
+        log_dir=log_dir,
+        save_dir=save_dir,
         max_steps=DEFAULT_MAX_STEPS,
         eval_freq=args.eval_freq,
         eval_episodes=args.eval_episodes,
@@ -98,7 +112,7 @@ def main() -> None:
     print(f"  Mean episode length:  {metrics['mean_episode_length']:.0f} steps")
     print(f"  Mean nodes compromised: {metrics['mean_nodes_compromised']:.1f}")
     print(f"  Mean max suspicion:   {metrics['mean_max_suspicion']:.0f}%")
-    print(f"\nFinal model saved to: {args.save_dir}/red_agent_final.zip")
+    print(f"\nFinal model saved to: {save_dir}/red_agent_final.zip")
 
 
 if __name__ == "__main__":

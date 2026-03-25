@@ -59,6 +59,26 @@ class TestNetwork:
         assert small_network.is_adjacent(2, 3)
         assert small_network.get_node(2).is_online
 
+    def test_isolate_node_double_call_is_safe(self, small_network: Network) -> None:
+        """Calling isolate_node() twice on the same node must be a no-op on the 2nd call.
+        Without the guard, the 2nd call overwrites stored_edges with [] — making
+        the isolation permanent even after restore_node()."""
+        assert small_network.is_adjacent(1, 2)
+
+        small_network.isolate_node(2)
+        assert not small_network.is_adjacent(1, 2)
+        assert 2 in small_network.isolated_edges
+
+        # Second call: must not overwrite the stored edges
+        small_network.isolate_node(2)
+        assert 2 in small_network.isolated_edges
+        assert len(small_network.isolated_edges[2]) > 0  # edges still stored
+
+        # Restore must work correctly after double-isolate
+        small_network.restore_node(2)
+        assert small_network.is_adjacent(1, 2)
+        assert 2 not in small_network.isolated_edges
+
     def test_reset_all_nodes(self, small_network: Network) -> None:
         node = small_network.get_node(0)
         node.session_level = SessionLevel.ROOT

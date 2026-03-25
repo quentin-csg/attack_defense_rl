@@ -99,9 +99,9 @@ def compute_action_mask(
             and node.is_online
             and node.session_level == SessionLevel.NONE
         ):
-            # Check if any compromised node can reach this one (2 hops)
+            # Check if any compromised (and online) node can reach this one (2 hops)
             for comp_id, comp_node in network.nodes.items():
-                if comp_node.session_level != SessionLevel.NONE:
+                if comp_node.session_level != SessionLevel.NONE and comp_node.is_online:
                     for neighbor_id in network.get_neighbors(comp_id):
                         if neighbor_id == node_id or node_id in network.get_neighbors(neighbor_id):
                             mask[ActionType.PIVOT * MAX_NODES + node_id] = True
@@ -116,10 +116,12 @@ def compute_action_mask(
             and node.is_online
             and node.discovery_level >= DiscoveryLevel.DISCOVERED
         ):
-            # Check if adjacent to any compromised node
+            # Check if adjacent to any compromised (and online) node
             for comp_id, comp_node in network.nodes.items():
-                if comp_node.session_level != SessionLevel.NONE and network.is_adjacent(
-                    comp_id, node_id
+                if (
+                    comp_node.session_level != SessionLevel.NONE
+                    and comp_node.is_online
+                    and network.is_adjacent(comp_id, node_id)
                 ):
                     mask[ActionType.LATERAL_MOVE * MAX_NODES + node_id] = True
                     break

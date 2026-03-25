@@ -40,6 +40,15 @@ from src.environment.node import DiscoveryLevel, SessionLevel
 
 logger = logging.getLogger(__name__)
 
+# Action types that move the agent to the target node on success.
+# Extracted as a module-level constant to avoid rebuilding the set on every step.
+_MOVEMENT_ACTIONS: frozenset[ActionType] = frozenset({
+    ActionType.EXPLOIT,
+    ActionType.BRUTE_FORCE,
+    ActionType.LATERAL_MOVE,
+    ActionType.PIVOT,
+})
+
 
 class CyberEnv(gym.Env):
     """Gymnasium environment for Red Team cyber attack simulation.
@@ -237,8 +246,7 @@ class CyberEnv(gym.Env):
             self.has_dumped_creds = True
 
         # Update agent position only for explicit movement actions
-        _movement_actions = {ActionType.EXPLOIT, ActionType.BRUTE_FORCE, ActionType.LATERAL_MOVE, ActionType.PIVOT}
-        if action_type in _movement_actions and result.success and target_node_id in self.network.nodes:
+        if action_type in _MOVEMENT_ACTIONS and result.success and target_node_id in self.network.nodes:
             target = self.network.get_node(target_node_id)
             if target.session_level != SessionLevel.NONE:
                 self.agent_position = target_node_id
@@ -261,8 +269,15 @@ class CyberEnv(gym.Env):
         if action_type == ActionType.EXFILTRATE and result.success:
             self.exfiltrated = True
 
-        # Check detection (any node suspicion >= max)
-        detected = any(n.suspicion_level >= SUSPICION_MAX for n in self.network.nodes.values())
+        # Check detection (any node suspicion >= max).
+        # Skip if the agent already exfiltrated this step — exfiltration wins,
+        # the simultaneous suspicion spike does not count as a detection.
+        # This prevents ambiguous outcomes where info["exfiltrated"] and
+        # info["detected"] are both True, which confuses Phase 4/6 metrics.
+        detected = (
+            not self.exfiltrated
+            and any(n.suspicion_level >= SUSPICION_MAX for n in self.network.nodes.values())
+        )
         if detected:
             reward += REWARD_DETECTED
             self._detected = True
@@ -323,6 +338,7 @@ class CyberEnv(gym.Env):
             "exfiltrated": self.exfiltrated,
             "detected": self._detected,
             "agent_position": self.agent_position,
+            "per_node_suspicion": {nid: n.suspicion_level for nid, n in self.network.nodes.items()},
         }
 
     def _build_render_state(self) -> Any:

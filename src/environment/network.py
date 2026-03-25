@@ -62,7 +62,12 @@ class Network:
         """Temporarily remove all edges of a node (Blue Team ISOLATE).
 
         Stores removed edges so they can be restored later.
+        Calling this on an already-isolated node is a no-op — without the
+        guard, the second call would overwrite the stored edges with an empty
+        list, making the isolation permanent even after restore_node().
         """
+        if node_id in self.isolated_edges:
+            return  # already isolated — do not overwrite stored edges
         edges = list(self.graph.edges(node_id))
         self.isolated_edges[node_id] = edges
         self.graph.remove_edges_from(edges)

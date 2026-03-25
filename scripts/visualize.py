@@ -26,8 +26,6 @@ import numpy as np
 # Add project root to Python path so `src` is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import MAX_NODES
-from src.environment.actions import ActionType
 from src.environment.cyber_env import CyberEnv
 
 
@@ -75,7 +73,9 @@ def main() -> None:
     print("Controls: SPACE=pause  +/-=speed  R=reset  ESC=quit\n")
 
     try:
-        for step in range(args.max_steps):
+        actual_steps = 0  # only count real env steps, not pause frames
+        rng = np.random.default_rng(args.seed)
+        while actual_steps < args.max_steps:
             # The renderer is the sole consumer of the Pygame event queue.
             # env.render() → renderer.update() → renderer._handle_events() processes
             # all QUIT / KEYDOWN (SPACE, +/-, R, ESC) / MOUSEBUTTONDOWN events.
@@ -86,7 +86,7 @@ def main() -> None:
             if controls is not None and not env._renderer.is_open:
                 break
 
-            # If paused: redraw without stepping, sleep briefly
+            # If paused: redraw without stepping, sleep briefly (do NOT increment actual_steps)
             if controls is not None and controls.paused:
                 env.render()
                 time.sleep(0.05)
@@ -100,9 +100,10 @@ def main() -> None:
             else:
                 # Pick a random valid action
                 valid_actions = mask.nonzero()[0]
-                action = int(np.random.default_rng(args.seed + step).choice(valid_actions))
+                action = int(rng.choice(valid_actions))
 
             obs, reward, terminated, truncated, info = env.step(action)
+            actual_steps += 1
             env.render()
 
             if terminated:

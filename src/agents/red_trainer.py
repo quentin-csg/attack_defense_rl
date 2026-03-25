@@ -91,6 +91,7 @@ def train(
     eval_freq: int = RL_EVAL_FREQ,
     eval_episodes: int = RL_EVAL_EPISODES,
     save_freq: int = RL_SAVE_FREQ,
+    dashboard_log_path: str | None = None,
 ) -> MaskablePPO:
     """Run the full Red Team training pipeline.
 
@@ -128,8 +129,14 @@ def train(
     train_env = make_masked_env(seed=seed, max_steps=max_steps)
     eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps)
 
+    model: MaskablePPO | None = None  # guard against UnboundLocalError if create_model raises
     try:
         model = create_model(train_env, log_dir=log_dir, seed=seed)
+
+        # Derive dashboard log path from log_dir if not explicitly provided
+        dash_path = dashboard_log_path or (
+            f"{log_dir}/dashboard_metrics.jsonl" if log_dir else "logs/dashboard_metrics.jsonl"
+        )
 
         callbacks = build_callback_list(
             eval_env=eval_env,
@@ -138,6 +145,8 @@ def train(
             save_freq=save_freq,
             eval_freq=eval_freq,
             eval_episodes=eval_episodes,
+            dashboard_log_path=dash_path,
+            reset_dashboard=True,
         )
 
         model.learn(
@@ -154,7 +163,7 @@ def train(
         train_env.close()
         eval_env.close()
 
-    if save_dir is not None:
+    if model is not None and save_dir is not None:
         final_path = str(Path(save_dir) / "red_agent_final")
         model.save(final_path)
         logger.info("Final model saved to %s.zip", final_path)
