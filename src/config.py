@@ -7,7 +7,7 @@ it MUST be defined here — no inline literals.
 # ---------------------------------------------------------------------------
 # Network topology
 # ---------------------------------------------------------------------------
-MAX_NODES: int = 50
+MAX_NODES: int = 64  # increased from 50 for Phase 5 PCG Large networks (50-60 nodes)
 DEFAULT_NETWORK_SIZE: int = 8  # fixed topology for Phase 1
 
 # ---------------------------------------------------------------------------
@@ -101,6 +101,35 @@ BLUE_ISOLATE_DURATION: int = 10
 
 # ROTATE cooldown: min steps between two ROTATE_CREDENTIALS on the same node
 BLUE_ROTATE_COOLDOWN: int = 5
+
+# ---------------------------------------------------------------------------
+# PCG — Génération procédurale de réseaux (Phase 5)
+# ---------------------------------------------------------------------------
+# Tailles de réseau : (min_nodes, max_nodes)
+PCG_SMALL_NODES: tuple[int, int] = (10, 15)
+PCG_SMALL_SUBNETS: tuple[int, int] = (2, 3)
+
+PCG_MEDIUM_NODES: tuple[int, int] = (25, 30)
+PCG_MEDIUM_SUBNETS: tuple[int, int] = (4, 5)
+
+PCG_LARGE_NODES: tuple[int, int] = (50, 60)
+PCG_LARGE_SUBNETS: tuple[int, int] = (7, 8)
+
+# max_steps par taille (par défaut — compute_max_steps() peut affiner)
+PCG_MAX_STEPS_SMALL: int = 150
+PCG_MAX_STEPS_MEDIUM: int = 250
+PCG_MAX_STEPS_LARGE: int = 350
+
+# Score de difficulté — coefficients
+PCG_BASE_STEPS: int = 40
+PCG_STEPS_PER_HOP: int = 15
+PCG_STEPS_PER_NODE: int = 2
+
+# Curriculum learning
+CURRICULUM_WORLDS_PER_STAGE: int = 5
+CURRICULUM_TIMESTEPS_SMALL: int = 100_000
+CURRICULUM_TIMESTEPS_MEDIUM: int = 150_000
+CURRICULUM_TIMESTEPS_LARGE: int = 200_000
 
 # ---------------------------------------------------------------------------
 # Episode limits

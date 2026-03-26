@@ -28,7 +28,7 @@ Ce projet est développé en plusieurs phases, chacune ajoutant une couche de co
 | Entraînement RL | **sb3-contrib** `MaskablePPO` | Action masking intégré |
 | Visualisation | **Pygame** | Dashboard live hacker-style |
 | Monitoring | **TensorBoard** | Courbes d'entraînement |
-| Tests | **pytest** | 336 tests, tous verts |
+| Tests | **pytest** | 395 tests, tous verts |
 | Linting | **ruff** | Format + lint |
 
 ---
@@ -55,7 +55,10 @@ attack_defense_rl/
 │   │   ├── red_trainer.py        # MaskablePPO config + train + evaluate
 │   │   ├── blue_scripted.py      # Blue Team scriptée (Phase 4)
 │   │   └── callbacks.py          # CyberMetricsCallback (TensorBoard)
-│   ├── pcg/                      # Phase 5 (à venir)
+│   ├── pcg/                      # Phase 5
+│   │   ├── generator.py          # Barabási-Albert + zones (DMZ/CORP/SERVER/DC)
+│   │   ├── difficulty.py         # Score de difficulté + is_solvable + max_steps
+│   │   └── curriculum.py         # CurriculumManager (Small → Medium → Large)
 │   └── utils/
 │
 ├── tests/
@@ -63,7 +66,8 @@ attack_defense_rl/
 │   ├── phase1/                   # 127 tests Phase 1
 │   ├── phase2/                   # 101 tests Phase 2
 │   ├── phase3/                   # 38 tests Phase 3
-│   └── phase4/                   # 49 tests Phase 4 (+ 21 Blue scripted + 11 intégration + 17 review)
+│   ├── phase4/                   # 49 tests Phase 4 (+ 21 Blue scripted + 11 intégration + 17 review)
+│   └── phase5/                   # 59 tests Phase 5 (generator, difficulty, curriculum, integration)
 │
 ├── scripts/
 │   ├── train_red.py              # Lancer l'entraînement RL
@@ -116,7 +120,7 @@ attack_defense_rl/
 
 ### Action Masking (MaskablePPO)
 
-- Masque booléen de `N_ACTION_TYPES × MAX_NODES = 700` actions
+- Masque booléen de `N_ACTION_TYPES × MAX_NODES = 896` actions
 - Invalide automatiquement les actions impossibles (EXPLOIT sur nœud non-énuméré, PRIVESC sans vuln, etc.)
 - `WAIT` est **toujours valide** — le masque ne peut pas être tout-à-zéro
 
@@ -124,11 +128,11 @@ attack_defense_rl/
 
 ```python
 {
-    "node_features":    Box(-1, 1, shape=(50, 13)),  # features par nœud, -1 = padding
-    "adjacency":        Box(0, 1, shape=(50, 50)),   # matrice adjacence masquée
-    "node_exists_mask": MultiBinary(50),             # nœuds réels vs padding
-    "fog_mask":         MultiBinary(50),             # nœuds découverts vs cachés
-    "agent_position":   Discrete(50),               # position actuelle
+    "node_features":    Box(-1, 1, shape=(64, 13)),  # features par nœud, -1 = padding
+    "adjacency":        Box(0, 1, shape=(64, 64)),   # matrice adjacence masquée
+    "node_exists_mask": MultiBinary(64),             # nœuds réels vs padding
+    "fog_mask":         MultiBinary(64),             # nœuds découverts vs cachés
+    "agent_position":   Discrete(64),               # position actuelle
     "global_features":  Box(0, 1, shape=(3,)),      # step/compromis/découverts
 }
 ```
@@ -171,6 +175,77 @@ Caractéristiques :
 
 ---
 
+## Fonctionnalités — Phase 5
+
+### Génération procédurale de réseaux (PCG)
+
+3 tailles de réseau avec topologie zonée réaliste :
+
+| Taille | Nœuds | Sous-réseaux | max_steps |
+| --- | --- | --- | --- |
+| **Small** | 10-15 | 2-3 | 150 |
+| **Medium** | 25-30 | 4-5 | 250 |
+| **Large** | 50-60 | 7-8 | 350 |
+
+Architecture zonée (Barabási-Albert intra-zone) :
+
+- **DMZ** — point d'entrée (Linux, Log4Shell, Shellshock)
+- **CORPORATE** — postes de travail (Windows 60%, EternalBlue, PrintNightmare, weak_creds)
+- **SERVER** — serveurs internes (Linux 70%, Docker Escape, SQLI)
+- **DATACENTER** — cible finale (Linux 80%, Baron Samedit, Dirty COW, PRIVESC obligatoire)
+
+Connexions inter-zones séquentielles avec 1-2 arêtes de raccourci cross-zone pour Medium/Large.
+
+### Score de difficulté
+
+```python
+score = min_hops * 3.0 + n_nodes * 0.5 - path_vuln_density * 5.0 - path_weak_creds * 3.0
+```
+
+`is_solvable()` vérifie : chemin entry→target, `has_loot` sur la cible, ≥1 vuln PRIVESC sur la cible. Retry ×10 automatique, fallback garanti si échec.
+
+### Curriculum learning
+
+```text
+Stage 1 (Small)  → 5 mondes × 100k timesteps
+Stage 2 (Medium) → 5 mondes × 150k timesteps
+Stage 3 (Large)  → 5 mondes × 200k timesteps
+```
+
+### Entraînement PCG
+
+```bash
+# Réseau aléatoire petit
+python scripts/train_red.py --pcg small --timesteps 100000 --run-name pcg_small
+
+# Curriculum automatique Small → Medium → Large
+python scripts/train_red.py --pcg curriculum --run-name curriculum
+
+# Avec Blue Team active
+python scripts/train_red.py --pcg medium --blue-team --timesteps 200000
+```
+
+### Utilisation de la factory PCG
+
+```python
+from src.pcg.generator import NetworkSize, generate_network
+from src.environment.cyber_env import CyberEnv
+from src.agents.wrappers import make_pcg_masked_env
+
+# CyberEnv avec génération d'un nouveau réseau à chaque reset()
+def factory(seed):
+    net, _ = generate_network(NetworkSize.SMALL, seed=seed)
+    return net
+
+env = CyberEnv(network_factory=factory, max_steps=150, seed=42)
+obs, info = env.reset()  # nouveau réseau Small aléatoire
+
+# Ou directement via le wrapper MaskablePPO
+env = make_pcg_masked_env(size="medium", seed=42)
+```
+
+---
+
 ## Installation
 
 ```bash
@@ -190,152 +265,105 @@ pip install -r requirements.txt
 
 ## Utilisation
 
-### Lancer l'environnement manuellement
-
-```python
-from src.environment.cyber_env import CyberEnv
-from src.environment.actions import ActionType, encode_action
-
-env = CyberEnv(seed=42)
-obs, info = env.reset()
-
-# Récupérer le masque d'actions valides
-mask = env.action_masks()
-
-# Exécuter une action (SCAN depuis le nœud 0)
-action = encode_action(ActionType.SCAN, 0)
-obs, reward, terminated, truncated, info = env.step(action)
-
-print(f"Step: {info['step']}, Reward: {reward:.1f}")
-print(f"Nœuds découverts: {info['n_discovered']}")
-print(f"Suspicion max: {info['max_suspicion']:.0f}%")
-```
-
-### Visualiser un épisode (Phase 2 minimale)
-
-```python
-from src.environment.cyber_env import CyberEnv
-
-# Ouvre une fenêtre Pygame et affiche le graphe en temps réel
-env = CyberEnv(seed=42, render_mode="human")
-obs, info = env.reset()
-
-for _ in range(200):
-    action = env.action_space.sample()
-    obs, reward, terminated, truncated, info = env.step(action)
-    env.render()
-    if terminated or truncated:
-        break
-
-env.close()
-```
-
-Le graphe affiche :
-- **Cyan** : nœud énuméré, non compromis
-- **Jaune** : nœud découvert, non énuméré
-- **Rouge** : session USER
-- **Rouge vif** : session ROOT
-- **Gris sombre** : nœud inconnu (Fog of War) ou hors-ligne
-- **Anneau vert** : nœud d'entrée (DMZ)
-- **Anneau gold** : nœud cible (Data Center)
-- **Anneau blanc** : position actuelle de l'agent
-
-Mode headless (pour scripts et tests) :
-
-```python
-env = CyberEnv(seed=42, render_mode="rgb_array")
-obs, info = env.reset()
-frame = env.render()  # np.ndarray (H, W, 3) uint8
-env.close()
-```
-
-### Entraîner l'agent Red Team avec Blue Team active (Phase 4)
+### 1. Vérifier l'installation (tests)
 
 ```bash
-# Entraînement avec Blue Team scriptée
-python scripts/train_red.py --timesteps 200000 --run-name phase4 --blue-team
+# Tous les tests (395, ~4 min)
+pytest tests/ -q
 
-# Sans Blue Team (comportement Phase 3)
-python scripts/train_red.py --timesteps 200000 --run-name baseline
-```
-
-### Dashboard Streamlit
-
-```bash
-streamlit run scripts/dashboard.py
-```
-
-- Mode **Live** : auto-refresh pendant l'entraînement
-- Mode **Replay** : scrubbing par timestep sur un run terminé
-- Sélecteur de run dans la sidebar, courbes TensorBoard, métriques cyber, graphe réseau
-
-### Entraîner l'agent Red Team (Phase 3)
-
-```bash
-# Entraînement complet (500k steps, ~2h CPU)
-python scripts/train_red.py
-
-# Entraînement court pour tester
-python scripts/train_red.py --timesteps 50000 --eval-freq 5000
-
-# Suivre l'entraînement avec TensorBoard
-tensorboard --logdir logs/
-```
-
-Métriques TensorBoard disponibles :
-
-- `cyber/exfiltration_rate` — taux d'épisodes réussis (objectif principal)
-- `cyber/detection_rate` — taux de détections par la Blue Team
-- `cyber/mean_nodes_compromised`, `cyber/mean_max_suspicion`
-
-### Évaluer un modèle entraîné
-
-```bash
-# Évaluation sur 100 épisodes
-python scripts/evaluate.py models/red_agent_final.zip
-
-# Évaluation avec politique stochastique
-python scripts/evaluate.py models/red_agent_final.zip --episodes 200 --stochastic
-```
-
-### Visualiser un agent entraîné
-
-```bash
-# Visualisation avec agent entraîné (fenêtre Pygame)
-python scripts/visualize.py --model models/red_agent_final.zip --speed 3
-
-# Visualisation avec actions aléatoires (baseline)
-python scripts/visualize.py --speed 3
-```
-
-### Tester l'environnement avec gymnasium
-
-```python
-from gymnasium.utils.env_checker import check_env
-from src.environment.cyber_env import CyberEnv
-
-env = CyberEnv()
-check_env(env)  # doit passer sans warnings
-```
-
-### Tests
-
-```bash
-# Tous les tests
-pytest tests/ -v
-
-# Phase 1 uniquement
-pytest tests/phase1/ -v
+# Phase spécifique uniquement
+pytest tests/phase5/ -v
 
 # Avec coverage
 pytest tests/ --cov=src --cov-report=term-missing
 ```
 
+### 2. Visualiser un épisode (fenêtre Pygame)
+
+```bash
+# Réseau fixe, actions aléatoires
+python scripts/visualize.py --speed 3
+
+# Réseau PCG aléatoire — nouveau réseau à chaque épisode
+python scripts/visualize.py --pcg small --speed 3
+python scripts/visualize.py --pcg medium --speed 2
+python scripts/visualize.py --pcg large --speed 2
+
+# Avec un agent entraîné
+python scripts/visualize.py --model models/mon_agent_final.zip --speed 5
+python scripts/visualize.py --pcg small --model models/pcg_small_final.zip --speed 5
+```
+
+Contrôles : `ESPACE` pause/reprendre · `+`/`-` vitesse · `ESC` quitter
+
+Couleurs des nœuds :
+
+- **Cyan** : énuméré, non compromis
+- **Jaune** : découvert, non énuméré
+- **Rouge** : session USER · **Rouge vif** : session ROOT
+- **Gris sombre** : inconnu (Fog of War) ou isolé par Blue Team
+- **Anneau vert** : nœud d'entrée (DMZ) · **Anneau gold** : cible
+
+### 3. Entraîner l'agent Red Team
+
+```bash
+# Réseau fixe — bon point de départ (~5 min CPU)
+python scripts/train_red.py --timesteps 100000 --run-name baseline
+
+# Réseau fixe + Blue Team active
+python scripts/train_red.py --timesteps 300000 --run-name vs_blue --blue-team
+
+# Réseau PCG aléatoire (nouveau réseau à chaque épisode)
+python scripts/train_red.py --pcg small --timesteps 100000 --run-name pcg_small
+python scripts/train_red.py --pcg medium --timesteps 200000 --run-name pcg_medium
+python scripts/train_red.py --pcg large --timesteps 300000 --run-name pcg_large
+
+# PCG + Blue Team
+python scripts/train_red.py --pcg medium --blue-team --timesteps 200000 --run-name pcg_medium_blue
+
+# Curriculum automatique Small → Medium → Large (~750k steps total, ~1h CPU)
+python scripts/train_red.py --pcg curriculum --run-name curriculum
+```
+
+Suivre l'entraînement en live :
+
+```bash
+tensorboard --logdir logs/
+# Ouvrir http://localhost:6006
+```
+
+Métriques clés :
+
+- `cyber/exfiltration_rate` — taux de réussite (objectif : >50%)
+- `cyber/detection_rate` — taux de détections Blue Team
+- `cyber/mean_nodes_compromised`, `cyber/mean_max_suspicion`
+
+### 4. Évaluer un modèle entraîné
+
+```bash
+# Évaluation sur 100 épisodes (déterministe)
+python scripts/evaluate.py models/mon_agent_final.zip
+
+# Plus d'épisodes, politique stochastique
+python scripts/evaluate.py models/mon_agent_final.zip --episodes 200 --stochastic
+```
+
+### 5. Dashboard Streamlit (monitoring d'entraînement)
+
+```bash
+streamlit run scripts/dashboard.py
+# Ouvrir http://localhost:8501
+```
+
+- Mode **Live** : auto-refresh pendant un entraînement en cours
+- Mode **Replay** : scrubbing par timestep sur un run terminé
+- Courbes TensorBoard, métriques cyber, graphe réseau, checkpoints
+
 ### Linting
 
 ```bash
 ruff check src/ tests/
-ruff format src/ tests/ 
+ruff format src/ tests/
 ```
 
 ---
@@ -351,5 +379,5 @@ ruff format src/ tests/
 | Review pré-Phase 4 | Corrections bugs + vulns réalistes + dashboard Streamlit | Terminé |
 | Phase 4 | Blue Team scriptée | Terminé |
 | Review pré-Phase 5 | 9 corrections + 17 tests | Terminé |
-| Phase 5 | Génération procédurale (PCG) | En attente |
+| Phase 5 | Génération procédurale (PCG) | Terminé |
 | Phase 6 | Blue Team RL + Self-play | En attente |

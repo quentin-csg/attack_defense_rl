@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from typing import Any
 
 import gymnasium as gym
@@ -74,11 +75,24 @@ class CyberEnv(gym.Env):
     def __init__(
         self,
         network: Network | None = None,
+        network_factory: Callable[[int | None], Network] | None = None,
         max_steps: int = DEFAULT_MAX_STEPS,
         seed: int | None = None,
         render_mode: str | None = None,
         blue_team: Any = None,
     ) -> None:
+        """Initialise CyberEnv.
+
+        Args:
+            network: Fixed network to use every episode (original behaviour).
+            network_factory: Callable(seed) → Network. When provided, a new
+                network is generated on each reset() call (Phase 5 PCG mode).
+                Takes precedence over ``network`` if both are supplied.
+            max_steps: Maximum steps per episode.
+            seed: Random seed for the episode RNGs.
+            render_mode: ``"human"`` or ``"rgb_array"`` for Pygame rendering.
+            blue_team: Optional ScriptedBlueTeam (Phase 4+). None = no defender.
+        """
         super().__init__()
 
         self.render_mode = render_mode
@@ -90,8 +104,18 @@ class CyberEnv(gym.Env):
         # Blue Team (optional — None means no defender, backward-compatible)
         self.blue_team = blue_team
 
+        # Network factory (Phase 5 PCG): when set, reset() generates a new
+        # topology each episode.
+        self._network_factory: Callable[[int | None], Network] | None = network_factory
+
         # Network setup
-        self.network: Network = network if network is not None else build_fixed_network(seed)
+        if network_factory is not None:
+            # Use the factory to build the initial network
+            self.network: Network = network_factory(seed)
+        elif network is not None:
+            self.network = network
+        else:
+            self.network = build_fixed_network(seed)
 
         # Fog of war
         self.fog = FogOfWar()
@@ -178,7 +202,12 @@ class CyberEnv(gym.Env):
             self._rng = random.Random(seed)
             self._np_rng = np.random.default_rng(seed)
 
-        # Reset network state
+        # PCG mode: generate a new network topology each episode
+        if self._network_factory is not None:
+            episode_seed = self._rng.randint(0, 2**31)
+            self.network = self._network_factory(episode_seed)
+
+        # Reset network state (node suspicion, sessions, etc.)
         self.network.reset_all_nodes()
         self._base_adjacency = self._build_adjacency()
 

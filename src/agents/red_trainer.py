@@ -93,6 +93,7 @@ def train(
     save_freq: int = RL_SAVE_FREQ,
     dashboard_log_path: str | None = None,
     blue_team: object = None,
+    pcg_size: str | None = None,
 ) -> MaskablePPO:
     """Run the full Red Team training pipeline.
 
@@ -127,8 +128,13 @@ def train(
         save_dir,
     )
 
-    train_env = make_masked_env(seed=seed, max_steps=max_steps, blue_team=blue_team)
-    eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps, blue_team=blue_team)
+    if pcg_size is not None:
+        from src.agents.wrappers import make_pcg_masked_env
+        train_env = make_pcg_masked_env(size=pcg_size, seed=seed, max_steps=max_steps, blue_team=blue_team)
+        eval_env = make_pcg_masked_env(size=pcg_size, seed=seed + 1000, max_steps=max_steps, blue_team=blue_team)
+    else:
+        train_env = make_masked_env(seed=seed, max_steps=max_steps, blue_team=blue_team)
+        eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps, blue_team=blue_team)
 
     model: MaskablePPO | None = None  # guard against UnboundLocalError if create_model raises
     try:
@@ -168,6 +174,137 @@ def train(
         final_path = str(Path(save_dir) / "red_agent_final")
         model.save(final_path)
         logger.info("Final model saved to %s.zip", final_path)
+
+    return model
+
+
+def train_curriculum(
+    curriculum: Any,  # CurriculumManager — lazy import to avoid circular dep
+    seed: int = 42,
+    log_dir: str | None = "logs/",
+    save_dir: str | None = "models/",
+    blue_team: object = None,
+    eval_freq: int = RL_EVAL_FREQ,
+    eval_episodes: int = RL_EVAL_EPISODES,
+    save_freq: int = RL_SAVE_FREQ,
+) -> MaskablePPO:
+    """Train the Red agent through a curriculum of increasing network sizes.
+
+    For each world in the curriculum:
+    1. Generate a fixed network topology.
+    2. Wrap it in a PCG env where EVERY episode uses that topology.
+    3. Train for ``timesteps_per_world`` steps.
+    4. Advance to the next world (and stage when exhausted).
+
+    The same model weights are carried through all stages — the model is
+    never reset, only the environment changes.
+
+    Args:
+        curriculum: CurriculumManager instance (from src.pcg.curriculum).
+        seed: Random seed.
+        log_dir: TensorBoard log directory.
+        save_dir: Directory for checkpoints and final model.
+        blue_team: Optional ScriptedBlueTeam.
+        eval_freq: Evaluate every N steps.
+        eval_episodes: Episodes per evaluation.
+        save_freq: Checkpoint every N steps.
+
+    Returns:
+        Trained MaskablePPO model.
+    """
+    from src.agents.wrappers import make_pcg_masked_env
+    from src.pcg.generator import generate_network
+
+    if log_dir is not None:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+    if save_dir is not None:
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    model: MaskablePPO | None = None
+    world_count = 0
+
+    try:
+        while not curriculum.is_complete:
+            net, meta = curriculum.generate_current_network()
+            stage_name = curriculum.current_stage.size.value
+            timesteps = curriculum.current_stage.timesteps_per_world
+
+            logger.info(
+                "Curriculum world %d | stage=%s | nodes=%d | hops=%d | steps=%d",
+                world_count,
+                stage_name,
+                meta.n_nodes,
+                meta.min_hops,
+                timesteps,
+            )
+
+            # Build env with the fixed network for this world
+            # (factory always returns the same net regardless of seed)
+            _fixed_net = net
+
+            def _factory(_s: int | None, _n=_fixed_net):
+                from src.environment.network import Network
+                # Reset node states for new episode but keep topology
+                _n.reset_all_nodes()
+                return _n
+
+            from src.environment.cyber_env import CyberEnv
+            from sb3_contrib.common.wrappers import ActionMasker
+            from stable_baselines3.common.monitor import Monitor
+
+            base_env = CyberEnv(
+                network_factory=_factory,
+                max_steps=meta.recommended_max_steps,
+                seed=seed + world_count,
+                blue_team=blue_team,
+            )
+            train_env = ActionMasker(Monitor(base_env), action_mask_fn=lambda e: base_env.action_masks())
+
+            # Eval env: PCG for the current stage so eval sees varied topologies
+            eval_env = make_pcg_masked_env(
+                size=stage_name,
+                seed=seed + world_count + 9999,
+                max_steps=meta.recommended_max_steps,
+                blue_team=blue_team,
+            )
+
+            dash_path = f"{log_dir}/dashboard_metrics.jsonl" if log_dir else "logs/dashboard_metrics.jsonl"
+
+            if model is None:
+                model = create_model(train_env, log_dir=log_dir, seed=seed)
+            else:
+                model.set_env(train_env)
+
+            callbacks = build_callback_list(
+                eval_env=eval_env,
+                log_dir=log_dir,
+                save_dir=save_dir,
+                save_freq=save_freq,
+                eval_freq=eval_freq,
+                eval_episodes=eval_episodes,
+                dashboard_log_path=dash_path,
+                reset_dashboard=(world_count == 0),
+            )
+
+            model.learn(
+                total_timesteps=timesteps,
+                callback=callbacks,
+                log_interval=RL_LOG_INTERVAL,
+                reset_num_timesteps=(world_count == 0),
+            )
+
+            train_env.close()
+            eval_env.close()
+            curriculum.advance_world()
+            world_count += 1
+
+    except KeyboardInterrupt:
+        logger.info("Curriculum training interrupted by user.")
+
+    if model is not None and save_dir is not None:
+        final_path = str(Path(save_dir) / "red_agent_curriculum_final")
+        model.save(final_path)
+        logger.info("Curriculum model saved to %s.zip", final_path)
 
     return model
 
