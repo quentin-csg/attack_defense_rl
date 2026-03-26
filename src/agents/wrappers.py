@@ -17,6 +17,7 @@ def make_masked_env(
     seed: int | None = None,
     max_steps: int = 200,
     render_mode: str | None = None,
+    blue_team: object = None,
 ) -> ActionMasker:
     """Create a CyberEnv wrapped with Monitor + ActionMasker for MaskablePPO.
 
@@ -28,11 +29,15 @@ def make_masked_env(
         seed: Random seed for reproducibility.
         max_steps: Maximum steps per episode.
         render_mode: Pygame render mode (None for headless training).
+        blue_team: Optional ScriptedBlueTeam (or compatible) instance.
+                   If None, no Blue Team acts (Phase 3 behaviour).
 
     Returns:
         ActionMasker-wrapped (Monitor-wrapped) CyberEnv.
     """
-    base_env = CyberEnv(seed=seed, max_steps=max_steps, render_mode=render_mode)
+    base_env = CyberEnv(
+        seed=seed, max_steps=max_steps, render_mode=render_mode, blue_team=blue_team
+    )
     env = Monitor(base_env)
     return ActionMasker(env, action_mask_fn=lambda e: base_env.action_masks())
 

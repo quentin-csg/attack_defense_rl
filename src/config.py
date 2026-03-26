@@ -91,6 +91,11 @@ PATROL_INTERVAL: int = 5  # mean steps between patrols (Poisson, CORRECTION 3)
 PATROL_DETECTION_SUSPICION: float = 25.0
 SURVEILLANCE_MULTIPLIER: float = 2.0
 
+# Noisy thresholds — randomised at each reset() so Red can't time-exploit them
+BLUE_ALERT_NOISE: float = 10.0    # ALERT threshold = 60 ± 10 (drawn in [50, 70])
+BLUE_ROTATE_NOISE: float = 10.0   # ROTATE threshold = 80 ± 10 (drawn in [70, 90])
+BLUE_ISOLATE_NOISE: float = 5.0   # ISOLATE threshold = 95 ± 5 (drawn in [90, 100])
+
 # ---------------------------------------------------------------------------
 # Episode limits
 # ---------------------------------------------------------------------------

@@ -92,6 +92,7 @@ def train(
     eval_episodes: int = RL_EVAL_EPISODES,
     save_freq: int = RL_SAVE_FREQ,
     dashboard_log_path: str | None = None,
+    blue_team: object = None,
 ) -> MaskablePPO:
     """Run the full Red Team training pipeline.
 
@@ -126,8 +127,8 @@ def train(
         save_dir,
     )
 
-    train_env = make_masked_env(seed=seed, max_steps=max_steps)
-    eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps)
+    train_env = make_masked_env(seed=seed, max_steps=max_steps, blue_team=blue_team)
+    eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps, blue_team=blue_team)
 
     model: MaskablePPO | None = None  # guard against UnboundLocalError if create_model raises
     try:

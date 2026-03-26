@@ -77,6 +77,7 @@ class CyberEnv(gym.Env):
         max_steps: int = DEFAULT_MAX_STEPS,
         seed: int | None = None,
         render_mode: str | None = None,
+        blue_team: Any = None,
     ) -> None:
         super().__init__()
 
@@ -85,6 +86,9 @@ class CyberEnv(gym.Env):
         self._seed = seed
         self._rng = random.Random(seed)
         self._np_rng = np.random.default_rng(seed)
+
+        # Blue Team (optional — None means no defender, backward-compatible)
+        self.blue_team = blue_team
 
         # Network setup
         self.network: Network = network if network is not None else build_fixed_network(seed)
@@ -171,6 +175,10 @@ class CyberEnv(gym.Env):
         # Reset network state
         self.network.reset_all_nodes()
         self._base_adjacency = self._build_adjacency()
+
+        # Re-randomise Blue Team thresholds for the new episode
+        if self.blue_team is not None:
+            self.blue_team.reset()
 
         # Invalidate renderer layout so it is recomputed on next render() call.
         # Needed for Phase 5 (PCG) where topology changes between episodes.
@@ -268,6 +276,16 @@ class CyberEnv(gym.Env):
         # Check exfiltration success
         if action_type == ActionType.EXFILTRATE and result.success:
             self.exfiltrated = True
+
+        # --- Blue Team acts (after Red, before detection check) ---
+        if self.blue_team is not None and not self.exfiltrated:
+            blue_actions = self.blue_team.act(self.network, self.current_step)
+            for ba in blue_actions:
+                log_text = (
+                    f"[{self.current_step}] BLUE {ba.action_type}"
+                    f" Node {ba.target_node_id}: {ba.details}"
+                )
+                self._action_log.append((self.current_step, log_text, "blue_action"))
 
         # Check detection (any node suspicion >= max).
         # Skip if the agent already exfiltrated this step — exfiltration wins,

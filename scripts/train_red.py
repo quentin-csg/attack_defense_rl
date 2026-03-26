@@ -73,6 +73,12 @@ def parse_args() -> argparse.Namespace:
         default=RL_SAVE_FREQ,
         help=f"Checkpoint every N steps (default: {RL_SAVE_FREQ})",
     )
+    parser.add_argument(
+        "--blue-team",
+        action="store_true",
+        default=False,
+        help="Enable scripted Blue Team defender during training (Phase 4).",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +89,14 @@ def main() -> None:
     run_name = args.run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
     log_dir = args.log_dir or f"logs/{run_name}"
     save_dir = args.save_dir or f"models/{run_name}"
+
+    blue_team = None
+    if args.blue_team:
+        from src.agents.blue_scripted import ScriptedBlueTeam
+        blue_team = ScriptedBlueTeam(seed=args.seed)
+        print("Blue Team: ENABLED (scripted, noisy thresholds, Poisson patrols)")
+    else:
+        print("Blue Team: DISABLED (Phase 3 mode)")
 
     print(f"Training Red Team agent | run={run_name} | timesteps={args.timesteps:,} | seed={args.seed}")
     print(f"Logs -> {log_dir}  |  Models -> {save_dir}")
@@ -97,6 +111,7 @@ def main() -> None:
         eval_freq=args.eval_freq,
         eval_episodes=args.eval_episodes,
         save_freq=args.save_freq,
+        blue_team=blue_team,
     )
 
     # Quick post-training evaluation
