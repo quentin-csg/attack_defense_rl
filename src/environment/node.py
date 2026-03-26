@@ -90,15 +90,26 @@ class Node:
         if self.suspicion_level > self.max_suspicion_historical:
             self.max_suspicion_historical = self.suspicion_level
 
-    def reduce_suspicion(self, amount: float) -> None:
-        """Reduce suspicion by `amount` (positive value), respecting the WAIT floor."""
+    def reduce_suspicion(self, amount: float, bypass_floor: bool = False) -> None:
+        """Reduce suspicion by `amount` (positive value).
+
+        Args:
+            amount: Positive value to subtract from suspicion.
+            bypass_floor: If True, ignore the WAIT floor (used by CLEAN_LOGS which
+                          requires ROOT access and has diminishing returns — it should
+                          be able to reduce suspicion below the historical peak / 2).
+                          WAIT always uses bypass_floor=False.
+        """
         from src.config import SUSPICION_MIN, WAIT_FLOOR_DIVISOR
 
-        floor = self.max_suspicion_historical / WAIT_FLOOR_DIVISOR
-        self.suspicion_level = max(
-            max(SUSPICION_MIN, floor),
-            self.suspicion_level - amount,  # subtract positive amount
-        )
+        if bypass_floor:
+            self.suspicion_level = max(SUSPICION_MIN, self.suspicion_level - amount)
+        else:
+            floor = self.max_suspicion_historical / WAIT_FLOOR_DIVISOR
+            self.suspicion_level = max(
+                max(SUSPICION_MIN, floor),
+                self.suspicion_level - amount,
+            )
 
     def reset_session(self) -> None:
         """Reset Red Team session (used by ROTATE_CREDENTIALS).

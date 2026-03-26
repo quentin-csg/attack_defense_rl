@@ -46,6 +46,7 @@ def make_vec_masked_env(
     n_envs: int = 1,
     seed: int = 42,
     max_steps: int = 200,
+    blue_team: object = None,
 ) -> DummyVecEnv:
     """Create vectorized masked environments for parallel rollout collection.
 
@@ -56,6 +57,8 @@ def make_vec_masked_env(
         n_envs: Number of parallel environments.
         seed: Base random seed (env i uses seed + i).
         max_steps: Maximum steps per episode.
+        blue_team: Optional ScriptedBlueTeam (or compatible) instance.
+                   If None, no Blue Team acts (Phase 3 behaviour).
 
     Returns:
         DummyVecEnv wrapping N ActionMasker-wrapped CyberEnv instances.
@@ -63,7 +66,7 @@ def make_vec_masked_env(
 
     def _make_env(i: int):
         def _init() -> ActionMasker:
-            return make_masked_env(seed=seed + i, max_steps=max_steps)
+            return make_masked_env(seed=seed + i, max_steps=max_steps, blue_team=blue_team)
 
         return _init
 

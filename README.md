@@ -28,7 +28,7 @@ Ce projet est développé en plusieurs phases, chacune ajoutant une couche de co
 | Entraînement RL | **sb3-contrib** `MaskablePPO` | Action masking intégré |
 | Visualisation | **Pygame** | Dashboard live hacker-style |
 | Monitoring | **TensorBoard** | Courbes d'entraînement |
-| Tests | **pytest** | 266 tests, tous verts |
+| Tests | **pytest** | 336 tests, tous verts |
 | Linting | **ruff** | Format + lint |
 
 ---
@@ -49,24 +49,27 @@ attack_defense_rl/
 │   │   ├── action_mask.py        # Masque booléen pour MaskablePPO
 │   │   └── cyber_env.py          # CyberEnv(gymnasium.Env) — env principal
 │   │
-│   ├── visualization/            # Phase 2 (implémenté — minimal)
-│   ├── agents/                   # Phase 3 (implémenté)
+│   ├── visualization/            # Phase 2 (implémenté — complet)
+│   ├── agents/                   # Phases 3, 4
 │   │   ├── wrappers.py           # ActionMasker + DummyVecEnv factories
 │   │   ├── red_trainer.py        # MaskablePPO config + train + evaluate
+│   │   ├── blue_scripted.py      # Blue Team scriptée (Phase 4)
 │   │   └── callbacks.py          # CyberMetricsCallback (TensorBoard)
 │   ├── pcg/                      # Phase 5 (à venir)
 │   └── utils/
 │
 ├── tests/
 │   ├── conftest.py               # Fixtures partagées
-│   ├── phase1/                   # 119 tests Phase 1
-│   ├── phase2/                   # 43 tests Phase 2
-│   └── phase3/                   # 33 tests Phase 3
+│   ├── phase1/                   # 127 tests Phase 1
+│   ├── phase2/                   # 101 tests Phase 2
+│   ├── phase3/                   # 38 tests Phase 3
+│   └── phase4/                   # 49 tests Phase 4 (+ 21 Blue scripted + 11 intégration + 17 review)
 │
 ├── scripts/
 │   ├── train_red.py              # Lancer l'entraînement RL
 │   ├── evaluate.py               # Évaluer un modèle sur N épisodes
-│   └── visualize.py              # Visualisation live (agent aléatoire ou entraîné)
+│   ├── visualize.py              # Visualisation live (agent aléatoire ou entraîné)
+│   └── dashboard.py              # Dashboard Streamlit (monitoring live/replay)
 └── models/                       # Modèles sauvegardés (gitignored)
 ```
 
@@ -141,6 +144,30 @@ REWARD_NEW_NODE_COMPROMISED =   +5.0
 REWARD_ROOT_OBTAINED        =  +10.0
 REWARD_REPEATED_ACTION      =   -1.0  # WAIT est exempté
 ```
+
+---
+
+## Fonctionnalités — Phase 4
+
+### Blue Team scriptée (défenseur réactif)
+
+4 actions disponibles :
+
+| Action | Effet | Déclencheur |
+| --- | --- | --- |
+| `ALERT` | Marque le nœud en surveillance (suspicion ×2) | suspicion ≥ 60 ± 10 |
+| `ROTATE_CREDENTIALS` | Invalide la session Red sur le nœud | suspicion ≥ 80 ± 10 |
+| `ISOLATE_NODE` | Déconnecte le nœud du réseau (auto-restore) | suspicion ≥ 95 ± 5 |
+| `PATROL` | Détection stochastique des traces (+25 susp) | Processus de Poisson (1/5 steps) |
+
+Caractéristiques :
+
+- **Seuils bruités** — re-randomisés à chaque épisode (±10/±10/±5) pour que le Red ne puisse pas timer les déclenchements
+- **Patrouilles Poisson** — timing imprévisible, même fréquence moyenne (CORRECTION 3)
+- **Isolation temporaire** — les nœuds isolés sont auto-restaurés après 10 steps (`BLUE_ISOLATE_DURATION`)
+- **Cooldown ROTATE** — 5 steps minimum entre deux rotations sur le même nœud (`BLUE_ROTATE_COOLDOWN`)
+- **CLEAN_LOGS** — peut descendre sous le floor `max_historical/2` (bypass activé)
+- **ROTATE invalide les creds** — après ROTATE_CREDENTIALS, `has_dumped_creds` est remis à False
 
 ---
 
@@ -222,6 +249,26 @@ frame = env.render()  # np.ndarray (H, W, 3) uint8
 env.close()
 ```
 
+### Entraîner l'agent Red Team avec Blue Team active (Phase 4)
+
+```bash
+# Entraînement avec Blue Team scriptée
+python scripts/train_red.py --timesteps 200000 --run-name phase4 --blue-team
+
+# Sans Blue Team (comportement Phase 3)
+python scripts/train_red.py --timesteps 200000 --run-name baseline
+```
+
+### Dashboard Streamlit
+
+```bash
+streamlit run scripts/dashboard.py
+```
+
+- Mode **Live** : auto-refresh pendant l'entraînement
+- Mode **Replay** : scrubbing par timestep sur un run terminé
+- Sélecteur de run dans la sidebar, courbes TensorBoard, métriques cyber, graphe réseau
+
 ### Entraîner l'agent Red Team (Phase 3)
 
 ```bash
@@ -297,10 +344,12 @@ ruff format src/ tests/
 
 | Phase | Description | Statut |
 | --- | --- | --- |
-| Phase 1 | Environnement Gymnasium + Fog of War |  Terminé |
+| Phase 1 | Environnement Gymnasium + Fog of War | Terminé |
 | Phase 2 min | Visualisation minimale Pygame | Terminé |
 | Phase 3 | Entraînement Red (MaskablePPO) | Terminé |
-| Phase 2 complète | Visualisation panels + animations | En attente |
-| Phase 4 | Blue Team scriptée | En attente |
+| Phase 2 complète | Visualisation panels + animations | Terminé |
+| Review pré-Phase 4 | Corrections bugs + vulns réalistes + dashboard Streamlit | Terminé |
+| Phase 4 | Blue Team scriptée | Terminé |
+| Review pré-Phase 5 | 9 corrections + 17 tests | Terminé |
 | Phase 5 | Génération procédurale (PCG) | En attente |
 | Phase 6 | Blue Team RL + Self-play | En attente |

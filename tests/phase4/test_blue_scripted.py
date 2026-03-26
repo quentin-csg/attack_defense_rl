@@ -15,8 +15,7 @@ from src.config import (
     PATROL_DETECTION_SUSPICION,
 )
 from src.environment.network import Network, build_fixed_network
-from src.environment.node import DiscoveryLevel, Node, OsType, SessionLevel
-
+from src.environment.node import SessionLevel
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -237,8 +236,6 @@ class TestPatrol:
         # Put a detectable trace on node 0
         target = fixed_network.get_node(0)
         target.detectable_traces.add("INSTALL_BACKDOOR")
-        susp_before = target.suspicion_level
-
         # Force patrol to pick node 0 by using a fixed seed that picks it
         # We'll just run and check that some node had detection applied
         found_detection = False
@@ -358,7 +355,6 @@ class TestPatrol:
 
     def test_patrol_detection_adds_surveillance(self, fixed_network: Network) -> None:
         """Patrol that detects traces must set is_under_surveillance = True."""
-        net = build_fixed_network(seed=42)
         for seed in range(30):
             blue = ScriptedBlueTeam(seed=seed)
             blue._alert_thresh = 200.0

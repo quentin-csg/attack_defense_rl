@@ -96,6 +96,12 @@ BLUE_ALERT_NOISE: float = 10.0    # ALERT threshold = 60 ± 10 (drawn in [50, 70
 BLUE_ROTATE_NOISE: float = 10.0   # ROTATE threshold = 80 ± 10 (drawn in [70, 90])
 BLUE_ISOLATE_NOISE: float = 5.0   # ISOLATE threshold = 95 ± 5 (drawn in [90, 100])
 
+# ISOLATE duration: isolated nodes are auto-restored after this many steps
+BLUE_ISOLATE_DURATION: int = 10
+
+# ROTATE cooldown: min steps between two ROTATE_CREDENTIALS on the same node
+BLUE_ROTATE_COOLDOWN: int = 5
+
 # ---------------------------------------------------------------------------
 # Episode limits
 # ---------------------------------------------------------------------------

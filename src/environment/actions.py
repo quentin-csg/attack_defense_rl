@@ -134,7 +134,9 @@ def execute_action(
         ActionType.EXPLOIT: _execute_exploit,
         ActionType.BRUTE_FORCE: _execute_brute_force,
         ActionType.PRIVESC: _execute_privesc,
-        ActionType.CREDENTIAL_DUMP: _execute_credential_dump,
+        ActionType.CREDENTIAL_DUMP: lambda tid, net, step, r, pos: _execute_credential_dump(
+            tid, net, step, r, pos, has_dumped_creds
+        ),
         ActionType.PIVOT: _execute_pivot,
         ActionType.LATERAL_MOVE: lambda tid, net, step, r, pos: _execute_lateral_move(
             tid, net, step, r, pos, has_dumped_creds
@@ -397,8 +399,17 @@ def _execute_credential_dump(
     current_step: int,
     rng: random.Random,
     agent_pos: int,
+    has_dumped_creds: bool = False,
 ) -> ActionResult:
     """CREDENTIAL_DUMP: extract reusable credentials from a compromised node."""
+    # Defence-in-depth: mask should block this, but guard here too
+    if has_dumped_creds:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "CREDENTIAL_DUMP", "target": target_id, "reason": "already_dumped"},
+        )
     node = network.get_node(target_id)
     if node.session_level == SessionLevel.NONE:
         return ActionResult(
@@ -441,11 +452,11 @@ def _execute_pivot(
             info={"action": "PIVOT", "target": target_id, "reason": "already_compromised"},
         )
 
-    # Defence-in-depth: verify reachability from a compromised node (2-hop max).
+    # Defence-in-depth: verify reachability from a compromised online node (2-hop max).
     # The action mask normally enforces this, but a direct handler call must also be safe.
     reachable = False
     for comp_id, comp_node in network.nodes.items():
-        if comp_node.session_level != SessionLevel.NONE:
+        if comp_node.session_level != SessionLevel.NONE and comp_node.is_online:
             neighbors = network.get_neighbors(comp_id)
             for neighbor_id in neighbors:
                 if neighbor_id == target_id or target_id in network.get_neighbors(neighbor_id):
@@ -494,6 +505,20 @@ def _execute_lateral_move(
             reward=0.0,
             suspicion_delta=0.0,
             info={"action": "LATERAL_MOVE", "target": target_id, "reason": "no_creds"},
+        )
+    # Defence-in-depth: target must be adjacent to a compromised online node
+    adjacent_to_compromised = any(
+        comp_node.session_level != SessionLevel.NONE
+        and comp_node.is_online
+        and network.is_adjacent(comp_id, target_id)
+        for comp_id, comp_node in network.nodes.items()
+    )
+    if not adjacent_to_compromised:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "LATERAL_MOVE", "target": target_id, "reason": "not_adjacent"},
         )
     susp = _apply_suspicion(node, SUSPICION_LATERAL_MOVE, network)
 
@@ -624,7 +649,7 @@ def _execute_clean_logs(
     idx = min(node.clean_logs_count, len(CLEAN_LOGS_SEQUENCE) - 1)
     suspicion_change = CLEAN_LOGS_SEQUENCE[idx]
 
-    node.reduce_suspicion(abs(suspicion_change))
+    node.reduce_suspicion(abs(suspicion_change), bypass_floor=True)
     node.clean_logs_count += 1
     node.last_clean_logs_step = current_step
     node.detectable_traces.clear()  # cleans all traces

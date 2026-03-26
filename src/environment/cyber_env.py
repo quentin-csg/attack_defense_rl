@@ -137,6 +137,12 @@ class CyberEnv(gym.Env):
         self.exfiltrated: bool = False
         self._detected: bool = False
 
+        # Adjacency dirty flag: set when Blue Team isolates/restores a node.
+        # Also tracked via _last_isolated_set to handle direct network.isolate_node()
+        # calls (e.g., tests, visualize script) that bypass step().
+        self._adjacency_dirty: bool = False
+        self._last_isolated_set: frozenset[int] = frozenset()
+
         # Render state accumulators (used by _build_render_state)
         self._action_log: list[Any] = []   # list[LogEntry], lazy import to avoid Pygame dep
         self._attacker_path: list[int] = []
@@ -192,6 +198,8 @@ class CyberEnv(gym.Env):
         self.episode_reward = 0.0
         self.exfiltrated = False
         self._detected = False
+        self._adjacency_dirty = False
+        self._last_isolated_set = frozenset()
 
         # Render accumulators
         self._action_log = []
@@ -286,6 +294,12 @@ class CyberEnv(gym.Env):
                     f" Node {ba.target_node_id}: {ba.details}"
                 )
                 self._action_log.append((self.current_step, log_text, "blue_action"))
+                # Topology changed — mark adjacency for rebuild on next _get_obs()
+                if ba.action_type in ("ISOLATE_NODE", "RESTORE_NODE"):
+                    self._adjacency_dirty = True
+                # ROTATE_CREDENTIALS invalidates dumped creds (A9)
+                if ba.action_type == "ROTATE_CREDENTIALS":
+                    self.has_dumped_creds = False
 
         # Check detection (any node suspicion >= max).
         # Skip if the agent already exfiltrated this step — exfiltration wins,
@@ -323,12 +337,16 @@ class CyberEnv(gym.Env):
 
     def _get_obs(self) -> dict[str, np.ndarray]:
         """Build the current observation."""
-        # Use cached adjacency during normal episodes (no rebuilds → faster training).
-        # Rebuild only when Blue Team has isolated nodes (non-empty isolated_edges dict)
-        # so that removed edges are correctly reflected in the observation.
-        adjacency = (
-            self._build_adjacency() if self.network.isolated_edges else self._base_adjacency
-        )
+        # Use cached adjacency; rebuild only when topology changed.
+        # Two triggers:
+        #   1. _adjacency_dirty — set by step() when Blue Team ISOLATE/RESTORE fires.
+        #   2. isolated_edges changed outside of step() (direct API calls, tests, scripts).
+        current_isolated = frozenset(self.network.isolated_edges.keys())
+        if self._adjacency_dirty or current_isolated != self._last_isolated_set:
+            self._base_adjacency = self._build_adjacency()
+            self._adjacency_dirty = False
+            self._last_isolated_set = current_isolated
+        adjacency = self._base_adjacency
         return self.fog.build_observation(
             nodes=self.network.nodes,
             adjacency=adjacency,

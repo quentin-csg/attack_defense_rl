@@ -6,9 +6,7 @@ import pytest
 
 from src.agents.blue_scripted import ScriptedBlueTeam
 from src.environment.cyber_env import CyberEnv
-from src.environment.network import build_fixed_network
 from src.environment.node import SessionLevel
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -96,8 +94,8 @@ class TestBlueActionLog:
         env_with_blue.network.get_node(entry).add_suspicion(50.0)
 
         # Step with WAIT action (index = ActionType.WAIT * MAX_NODES + entry_node)
-        from src.environment.actions import ActionType
         from src.config import MAX_NODES
+        from src.environment.actions import ActionType
         wait_action = ActionType.WAIT.value * MAX_NODES + entry
         env_with_blue.step(wait_action)
 
@@ -107,8 +105,8 @@ class TestBlueActionLog:
     def test_no_blue_log_without_blue_team(self, env_no_blue: CyberEnv) -> None:
         """Without Blue Team, no blue_action entries in the log."""
         env_no_blue.reset()
-        from src.environment.actions import ActionType
         from src.config import MAX_NODES
+        from src.environment.actions import ActionType
         wait_action = ActionType.WAIT.value * MAX_NODES + env_no_blue.agent_position
         env_no_blue.step(wait_action)
 
@@ -141,8 +139,8 @@ class TestRotateInEnv:
         node.session_level = SessionLevel.USER
         node.add_suspicion(50.0)
 
-        from src.environment.actions import ActionType
         from src.config import MAX_NODES
+        from src.environment.actions import ActionType
         wait_action = ActionType.WAIT.value * MAX_NODES + entry
         env.step(wait_action)
 
@@ -166,8 +164,8 @@ class TestRotateInEnv:
         node.has_backdoor = True
         node.add_suspicion(50.0)
 
-        from src.environment.actions import ActionType
         from src.config import MAX_NODES
+        from src.environment.actions import ActionType
         wait_action = ActionType.WAIT.value * MAX_NODES + entry
         env.step(wait_action)
 
@@ -197,8 +195,8 @@ class TestIsolateInEnv:
         node = env.network.get_node(entry)
         node.add_suspicion(50.0)  # floor=25 after WAIT, still > 0.1
 
-        from src.environment.actions import ActionType
         from src.config import MAX_NODES
+        from src.environment.actions import ActionType
         wait_action = ActionType.WAIT.value * MAX_NODES + entry
         env.step(wait_action)
 
@@ -219,8 +217,8 @@ class TestIsolateInEnv:
         entry = env.network.entry_node_id
         env.network.get_node(entry).add_suspicion(50.0)
 
-        from src.environment.actions import ActionType
         from src.config import MAX_NODES
+        from src.environment.actions import ActionType
         wait_action = ActionType.WAIT.value * MAX_NODES + entry
         env.step(wait_action)
 

@@ -23,8 +23,10 @@ from typing import NamedTuple
 from src.config import (
     BLUE_ALERT_NOISE,
     BLUE_ALERT_THRESHOLD,
+    BLUE_ISOLATE_DURATION,
     BLUE_ISOLATE_NOISE,
     BLUE_ISOLATE_THRESHOLD,
+    BLUE_ROTATE_COOLDOWN,
     BLUE_ROTATE_NOISE,
     BLUE_ROTATE_THRESHOLD,
     PATROL_DETECTION_SUSPICION,
@@ -56,6 +58,8 @@ class ScriptedBlueTeam:
     def __init__(self, seed: int = 42, patrol_interval: int = PATROL_INTERVAL) -> None:
         self._rng = random.Random(seed)
         self._patrol_interval = patrol_interval
+        self._isolated_at: dict[int, int] = {}   # node_id -> step it was isolated
+        self._last_rotate: dict[int, int] = {}   # node_id -> last step ROTATE fired
         self._randomize_thresholds()
 
     # ------------------------------------------------------------------
@@ -64,6 +68,8 @@ class ScriptedBlueTeam:
 
     def reset(self) -> None:
         """Re-randomise noisy thresholds for a new episode."""
+        self._isolated_at = {}
+        self._last_rotate = {}
         self._randomize_thresholds()
 
     def act(self, network: Network, current_step: int) -> list[BlueAction]:
@@ -84,6 +90,20 @@ class ScriptedBlueTeam:
         """
         actions: list[BlueAction] = []
 
+        # 0. Auto-restore isolated nodes whose duration has elapsed (A6)
+        to_restore = [
+            nid for nid, step in self._isolated_at.items()
+            if current_step - step >= BLUE_ISOLATE_DURATION
+        ]
+        for nid in to_restore:
+            network.restore_node(nid)
+            del self._isolated_at[nid]
+            actions.append(BlueAction(
+                action_type="RESTORE_NODE",
+                target_node_id=nid,
+                details=f"Isolation expired after {BLUE_ISOLATE_DURATION} steps",
+            ))
+
         # 1. Stochastic patrol (CORRECTION 3 — Poisson, not deterministic)
         if self._rng.random() < 1.0 / self._patrol_interval:
             patrol_action = self._patrol(network)
@@ -97,9 +117,11 @@ class ScriptedBlueTeam:
                 continue  # already isolated — no further action needed
 
             if node.suspicion_level >= self._isolate_thresh:
-                actions.append(self._isolate(network, node_id))
+                actions.append(self._isolate(network, node_id, current_step))
             elif node.suspicion_level >= self._rotate_thresh:
-                actions.append(self._rotate(network, node_id))
+                rotate_action = self._rotate(network, node_id, current_step)
+                if rotate_action is not None:
+                    actions.append(rotate_action)
             elif node.suspicion_level >= self._alert_thresh:
                 actions.append(self._alert(network, node_id))
 
@@ -168,12 +190,18 @@ class ScriptedBlueTeam:
             details=f"Susp={node.suspicion_level:.0f} — node under surveillance",
         )
 
-    def _rotate(self, network: Network, node_id: int) -> BlueAction:
+    def _rotate(self, network: Network, node_id: int, current_step: int) -> BlueAction | None:
         """Invalidate Red sessions on a node via credential rotation.
 
         Calls reset_session() which respects has_backdoor (if backdoor is
         installed, the session survives rotation).
+
+        Returns None if ROTATE_COOLDOWN has not elapsed since the last rotation
+        on this node (downgraded to no-action; ALERT was already applied).
         """
+        if current_step - self._last_rotate.get(node_id, -BLUE_ROTATE_COOLDOWN - 1) < BLUE_ROTATE_COOLDOWN:
+            return None  # cooldown active — skip rotation this step
+        self._last_rotate[node_id] = current_step
         node = network.get_node(node_id)
         had_session = node.session_level.value > 0
         node.reset_session()
@@ -189,10 +217,11 @@ class ScriptedBlueTeam:
             details=detail,
         )
 
-    def _isolate(self, network: Network, node_id: int) -> BlueAction:
-        """Disconnect a node from the network."""
+    def _isolate(self, network: Network, node_id: int, current_step: int) -> BlueAction:
+        """Disconnect a node from the network (auto-restores after BLUE_ISOLATE_DURATION)."""
         node = network.get_node(node_id)
         network.isolate_node(node_id)
+        self._isolated_at[node_id] = current_step
         return BlueAction(
             action_type="ISOLATE_NODE",
             target_node_id=node_id,
