@@ -25,11 +25,14 @@ class DashboardControls:
             at idle rate (still responsive to events).
         speed_multiplier: Effective speed relative to base delay. 1.0 = normal,
             2.0 = twice as fast (half the sleep time), 0.5 = slower.
+        restart_requested: Set to True when the user presses R. The main loop
+            checks this flag and restarts the episode when it is True.
         _speed_idx: Index into _SPEED_PRESETS for cycling.
     """
 
     paused: bool = False
     speed_multiplier: float = 1.0
+    restart_requested: bool = False
     _speed_idx: int = field(default=2, repr=False)  # index of 1.0 in _SPEED_PRESETS
 
     def toggle_pause(self) -> None:
@@ -77,6 +80,6 @@ def handle_key_event(event: pygame.event.Event, controls: DashboardControls) -> 
         controls.speed_down()
         return True
     if key == pygame.K_r:
-        controls.reset()
+        controls.restart_requested = True
         return True
     return False

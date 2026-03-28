@@ -60,6 +60,7 @@ class ScriptedBlueTeam:
         self._patrol_interval = patrol_interval
         self._isolated_at: dict[int, int] = {}   # node_id -> step it was isolated
         self._last_rotate: dict[int, int] = {}   # node_id -> last step ROTATE fired
+        self._surveillance_logged: set[int] = set()  # nodes already logged as under surveillance
         self._randomize_thresholds()
 
     # ------------------------------------------------------------------
@@ -70,6 +71,7 @@ class ScriptedBlueTeam:
         """Re-randomise noisy thresholds for a new episode."""
         self._isolated_at = {}
         self._last_rotate = {}
+        self._surveillance_logged = set()
         self._randomize_thresholds()
 
     def act(self, network: Network, current_step: int) -> list[BlueAction]:
@@ -97,11 +99,18 @@ class ScriptedBlueTeam:
         ]
         for nid in to_restore:
             network.restore_node(nid)
+            node = network.get_node(nid)
+            node.is_under_surveillance = False
+            was_logged = nid in self._surveillance_logged
+            self._surveillance_logged.discard(nid)
             del self._isolated_at[nid]
+            detail = f"Isolation expired after {BLUE_ISOLATE_DURATION} steps"
+            if was_logged:
+                detail += " — surveillance lifted"
             actions.append(BlueAction(
                 action_type="RESTORE_NODE",
                 target_node_id=nid,
-                details=f"Isolation expired after {BLUE_ISOLATE_DURATION} steps",
+                details=detail,
             ))
 
         # 1. Stochastic patrol (CORRECTION 3 — Poisson, not deterministic)
@@ -123,7 +132,9 @@ class ScriptedBlueTeam:
                 if rotate_action is not None:
                     actions.append(rotate_action)
             elif node.suspicion_level >= self._alert_thresh:
-                actions.append(self._alert(network, node_id))
+                alert_action = self._alert(network, node_id)
+                if alert_action is not None:
+                    actions.append(alert_action)
 
         return actions
 
@@ -166,12 +177,15 @@ class ScriptedBlueTeam:
 
         if node.detectable_traces:
             node.add_suspicion(PATROL_DETECTION_SUSPICION)
+            already_surveilled = node.is_under_surveillance
             node.is_under_surveillance = True
+            self._surveillance_logged.add(target_id)
             traces_str = ", ".join(sorted(node.detectable_traces))
+            suffix = "" if already_surveilled else " — now under surveillance"
             return BlueAction(
                 action_type="PATROL",
                 target_node_id=target_id,
-                details=f"Traces detected: {traces_str} (+{PATROL_DETECTION_SUSPICION:.0f} Susp)",
+                details=f"Traces detected: {traces_str} (+{PATROL_DETECTION_SUSPICION:.0f} Susp){suffix}",
             )
 
         return BlueAction(
@@ -180,10 +194,17 @@ class ScriptedBlueTeam:
             details="No traces found",
         )
 
-    def _alert(self, network: Network, node_id: int) -> BlueAction:
-        """Mark a node under enhanced surveillance."""
+    def _alert(self, network: Network, node_id: int) -> BlueAction | None:
+        """Mark a node under enhanced surveillance.
+
+        Returns None if this node was already logged as under surveillance this
+        episode (avoids spamming the action log every step).
+        """
         node = network.get_node(node_id)
         node.is_under_surveillance = True
+        if node_id in self._surveillance_logged:
+            return None  # already reported — suppress duplicate log entry
+        self._surveillance_logged.add(node_id)
         return BlueAction(
             action_type="ALERT",
             target_node_id=node_id,
@@ -222,6 +243,9 @@ class ScriptedBlueTeam:
         node = network.get_node(node_id)
         network.isolate_node(node_id)
         self._isolated_at[node_id] = current_step
+        # An isolated node is always under surveillance (re-set in case RESTORE cleared it).
+        node.is_under_surveillance = True
+        self._surveillance_logged.add(node_id)
         return BlueAction(
             action_type="ISOLATE_NODE",
             target_node_id=node_id,

@@ -44,6 +44,20 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 
+def _make_eval_blue_team(blue_team: object, seed: int) -> object:
+    """Return an independent Blue Team instance for an eval environment.
+
+    Sharing a single ScriptedBlueTeam between train and eval envs causes
+    their internal RNGs to interleave on each reset(), making threshold
+    randomization non-reproducible across runs with the same seed.
+    """
+    if blue_team is None:
+        return None
+    from src.agents.blue_scripted import ScriptedBlueTeam
+
+    return ScriptedBlueTeam(seed=seed)
+
+
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
     """Linear learning rate schedule: LR decays from initial_value to 0."""
     return lambda progress_remaining: initial_value * progress_remaining
@@ -128,19 +142,22 @@ def train(
         save_dir,
     )
 
+    eval_blue = _make_eval_blue_team(blue_team, seed + 9999)
     if pcg_size is not None:
         from src.agents.wrappers import make_pcg_masked_env
         train_env = make_pcg_masked_env(size=pcg_size, seed=seed, max_steps=max_steps, blue_team=blue_team)
-        eval_env = make_pcg_masked_env(size=pcg_size, seed=seed + 1000, max_steps=max_steps, blue_team=blue_team)
+        eval_env = make_pcg_masked_env(size=pcg_size, seed=seed + 1000, max_steps=max_steps, blue_team=eval_blue)
     else:
         train_env = make_masked_env(seed=seed, max_steps=max_steps, blue_team=blue_team)
-        eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps, blue_team=blue_team)
+        eval_env = make_masked_env(seed=seed + 1000, max_steps=max_steps, blue_team=eval_blue)
 
     model: MaskablePPO | None = None  # guard against UnboundLocalError if create_model raises
     try:
         model = create_model(train_env, log_dir=log_dir, seed=seed)
 
         # Derive dashboard log path from log_dir if not explicitly provided
+        if not dashboard_log_path and not log_dir:
+            Path("logs").mkdir(parents=True, exist_ok=True)
         dash_path = dashboard_log_path or (
             f"{log_dir}/dashboard_metrics.jsonl" if log_dir else "logs/dashboard_metrics.jsonl"
         )
@@ -252,49 +269,61 @@ def train_curriculum(
             from sb3_contrib.common.wrappers import ActionMasker
             from stable_baselines3.common.monitor import Monitor
 
-            base_env = CyberEnv(
-                network_factory=_factory,
-                max_steps=meta.recommended_max_steps,
-                seed=seed + world_count,
-                blue_team=blue_team,
-            )
-            train_env = ActionMasker(Monitor(base_env), action_mask_fn=lambda e: base_env.action_masks())
+            train_env = None
+            eval_env = None
+            try:
+                base_env = CyberEnv(
+                    network_factory=_factory,
+                    max_steps=meta.recommended_max_steps,
+                    seed=seed + world_count,
+                    blue_team=blue_team,
+                )
+                train_env = ActionMasker(Monitor(base_env), action_mask_fn=lambda e: base_env.action_masks())
 
-            # Eval env: PCG for the current stage so eval sees varied topologies
-            eval_env = make_pcg_masked_env(
-                size=stage_name,
-                seed=seed + world_count + 9999,
-                max_steps=meta.recommended_max_steps,
-                blue_team=blue_team,
-            )
+                # Eval env: PCG for the current stage so eval sees varied topologies.
+                # Use a separate Blue Team instance to avoid shared RNG state with train_env.
+                eval_blue = _make_eval_blue_team(blue_team, seed + world_count + 9999)
+                eval_env = make_pcg_masked_env(
+                    size=stage_name,
+                    seed=seed + world_count + 9999,
+                    max_steps=meta.recommended_max_steps,
+                    blue_team=eval_blue,
+                )
 
-            dash_path = f"{log_dir}/dashboard_metrics.jsonl" if log_dir else "logs/dashboard_metrics.jsonl"
+                if log_dir:
+                    dash_path = f"{log_dir}/dashboard_metrics.jsonl"
+                else:
+                    Path("logs").mkdir(parents=True, exist_ok=True)
+                    dash_path = "logs/dashboard_metrics.jsonl"
 
-            if model is None:
-                model = create_model(train_env, log_dir=log_dir, seed=seed)
-            else:
-                model.set_env(train_env)
+                if model is None:
+                    model = create_model(train_env, log_dir=log_dir, seed=seed)
+                else:
+                    model.set_env(train_env)
 
-            callbacks = build_callback_list(
-                eval_env=eval_env,
-                log_dir=log_dir,
-                save_dir=save_dir,
-                save_freq=save_freq,
-                eval_freq=eval_freq,
-                eval_episodes=eval_episodes,
-                dashboard_log_path=dash_path,
-                reset_dashboard=(world_count == 0),
-            )
+                callbacks = build_callback_list(
+                    eval_env=eval_env,
+                    log_dir=log_dir,
+                    save_dir=save_dir,
+                    save_freq=save_freq,
+                    eval_freq=eval_freq,
+                    eval_episodes=eval_episodes,
+                    dashboard_log_path=dash_path,
+                    reset_dashboard=(world_count == 0),
+                )
 
-            model.learn(
-                total_timesteps=timesteps,
-                callback=callbacks,
-                log_interval=RL_LOG_INTERVAL,
-                reset_num_timesteps=(world_count == 0),
-            )
+                model.learn(
+                    total_timesteps=timesteps,
+                    callback=callbacks,
+                    log_interval=RL_LOG_INTERVAL,
+                    reset_num_timesteps=(world_count == 0),
+                )
+            finally:
+                if train_env is not None:
+                    train_env.close()
+                if eval_env is not None:
+                    eval_env.close()
 
-            train_env.close()
-            eval_env.close()
             curriculum.advance_world()
             world_count += 1
 

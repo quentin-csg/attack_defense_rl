@@ -30,7 +30,7 @@ class TestActionEncoding:
 
     def test_action_space_size(self) -> None:
         total = len(ActionType) * MAX_NODES
-        assert total == 14 * 64  # 896 (MAX_NODES=64 since Phase 5)
+        assert total == 15 * 64  # 960 (15 actions after adding LIST_FILES, MAX_NODES=64)
 
 
 class TestScan:

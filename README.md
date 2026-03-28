@@ -28,7 +28,7 @@ Ce projet est développé en plusieurs phases, chacune ajoutant une couche de co
 | Entraînement RL | **sb3-contrib** `MaskablePPO` | Action masking intégré |
 | Visualisation | **Pygame** | Dashboard live hacker-style |
 | Monitoring | **TensorBoard** | Courbes d'entraînement |
-| Tests | **pytest** | 395 tests, tous verts |
+| Tests | **pytest** | 410 tests, tous verts |
 | Linting | **ruff** | Format + lint |
 
 ---
@@ -45,7 +45,7 @@ attack_defense_rl/
 │   │   ├── vulnerability.py      # VulnType + registre extensible (8 vulns built-in)
 │   │   ├── network.py            # Wrapper NetworkX (topologie, isolate/restore)
 │   │   ├── fog_of_war.py         # Masque d'observation partielle (Fog of War)
-│   │   ├── actions.py            # 14 ActionType + logique d'exécution
+│   │   ├── actions.py            # 15 ActionType + logique d'exécution (dont LIST_FILES)
 │   │   ├── action_mask.py        # Masque booléen pour MaskablePPO
 │   │   └── cyber_env.py          # CyberEnv(gymnasium.Env) — env principal
 │   │
@@ -93,7 +93,7 @@ attack_defense_rl/
 - Registre global — ajouter une nouvelle vuln = une seule ligne
 - 8 vulnérabilités built-in (rce_generic, sqli_basic, privesc_kernel, weak_credentials, etc.)
 
-### 14 actions Red Teamer
+### 15 actions Red Teamer
 
 | Action | Effet | Suspicion |
 | --- | --- | --- |
@@ -107,10 +107,13 @@ attack_defense_rl/
 | `PIVOT` | Accès à un nœud DISCOVERED non-adjacent via relais compromis | +5 |
 | `LATERAL_MOVE` | Accès adjacent via creds dumpés | +8 |
 | `INSTALL_BACKDOOR` | Accès persistant (résiste à ROTATE_CREDENTIALS) | +10 |
-| `EXFILTRATE` | **Objectif principal** — +150 reward (requiert ROOT) | +20 |
+| `EXFILTRATE` | Exfiltration sur réseau fixe (requiert ROOT + loot) | +20 |
+| `LIST_FILES` | **Objectif PCG** — exécute `ls` sur la cible (requiert USER + loot) | +5 |
 | `TUNNEL` | Chiffrement — divise suspicion future par 2 | +5 |
 | `CLEAN_LOGS` | Efface les traces (diminishing returns) | -15/-10/-5/-2 |
 | `WAIT` | Réduit la suspicion (floor = max_historique / 2) | -3 |
+
+> **Note** : sur les réseaux PCG, la victoire se fait via `LIST_FILES` (session USER suffisante). La cible n'a aucune vulnérabilité — il faut l'atteindre par `LATERAL_MOVE` / `CREDENTIAL_DUMP`.
 
 ### Fog of War
 
@@ -120,7 +123,7 @@ attack_defense_rl/
 
 ### Action Masking (MaskablePPO)
 
-- Masque booléen de `N_ACTION_TYPES × MAX_NODES = 896` actions
+- Masque booléen de `N_ACTION_TYPES × MAX_NODES = 15 × 64 = 960` actions
 - Invalide automatiquement les actions impossibles (EXPLOIT sur nœud non-énuméré, PRIVESC sans vuln, etc.)
 - `WAIT` est **toujours valide** — le masque ne peut pas être tout-à-zéro
 
@@ -148,6 +151,47 @@ REWARD_NEW_NODE_COMPROMISED =   +5.0
 REWARD_ROOT_OBTAINED        =  +10.0
 REWARD_REPEATED_ACTION      =   -1.0  # WAIT est exempté
 ```
+
+---
+
+## Fonctionnalités — Phase 2 (visualisation)
+
+### Dashboard Pygame
+
+- **Graphe central** — icônes géométriques par OS type (monitor Windows, rack Linux, shield NETWORK_DEVICE)
+- **Fog of War** — nœuds inconnus affichés en nuage gris ; nœuds découverts en cyan/jaune/rouge selon session
+- **Panneaux latéraux repliables** — Scan / Nodes / Attacker / Stats / Haze (sidebar gauche)
+- **Action Log scrollable** — horodaté, coloré par type (vert=Red, cyan=Blue, rouge=échec)
+- **Barres de suspicion** — histogramme bas-gauche, couleur par seuil (vert/jaune/orange/rouge)
+- **Animations** — pulse ROOT, flash exploit, halo multi-ring sur la position agent, chemin attaquant en bleu
+
+### Contrôles clavier / souris
+
+| Touche / Action | Effet |
+| --- | --- |
+| `ESPACE` | Pause / reprendre |
+| `+` / `-` | Vitesse × 2 / ÷ 2 |
+| `←` / `→` | Replay pas à pas (historique de l'épisode) |
+| `←` / `→` maintenu | Accélération progressive (1 → 3 → 6 steps/frame) |
+| `G` | Barre de recherche — sauter directement à un step |
+| `R` | Redémarrer l'épisode (nouveau réseau en mode PCG) |
+| `Z` | Réinitialiser zoom et pan |
+| `ESC` | Quitter |
+| Molette souris (graphe) | Zoom centré sur le curseur (0.2× à 4.0×) |
+| Clic sur un nœud | Afficher le panneau d'info (OS, services, vulns, session, suspicion) |
+| Clic + glisser un nœud | Repositionner le nœud librement |
+| Clic + glisser le fond | Déplacer (pan) tout le graphe |
+
+### Replay historique
+
+- Chaque step réel est enregistré avec un snapshot complet (`copy.deepcopy`)
+- En replay : les nœuds non encore découverts à ce step s'affichent en icône grise (ni nuage, ni rouge final)
+- La barre de statut indique `REPLAY step X [Y/Z]`
+
+### Indicateurs Blue Team visuels
+
+- **Bouclier bleu** en haut à droite d'un nœud = nœud actuellement sous surveillance Blue Team
+- **BLUE ALERT** logué une seule fois par nœud (pas de spam à chaque step) ; "surveillance lifted" logué à la restauration
 
 ---
 
@@ -187,14 +231,16 @@ Caractéristiques :
 | **Medium** | 25-30 | 4-5 | 250 |
 | **Large** | 50-60 | 7-8 | 350 |
 
-Architecture zonée (Barabási-Albert intra-zone) :
+Architecture zonée (Barabási-Albert intra-zone, m=1 — graphe sparse) :
 
 - **DMZ** — point d'entrée (Linux, Log4Shell, Shellshock)
 - **CORPORATE** — postes de travail (Windows 60%, EternalBlue, PrintNightmare, weak_creds)
 - **SERVER** — serveurs internes (Linux 70%, Docker Escape, SQLI)
-- **DATACENTER** — cible finale (Linux 80%, Baron Samedit, Dirty COW, PRIVESC obligatoire)
+- **DATACENTER** — cible finale (Linux 80%, **aucune vuln** — flag.txt uniquement, victoire via `LIST_FILES`)
 
-Connexions inter-zones séquentielles avec 1-2 arêtes de raccourci cross-zone pour Medium/Large.
+Connexions inter-zones séquentielles (~25% de chance d'une seconde gateway). Pas de shortcuts cross-zone.
+
+**Cible** : nœud DATACENTER le plus éloigné de l'entrée (distance BFS maximale) — garantit un chemin long.
 
 ### Score de difficulté
 
@@ -202,7 +248,7 @@ Connexions inter-zones séquentielles avec 1-2 arêtes de raccourci cross-zone p
 score = min_hops * 3.0 + n_nodes * 0.5 - path_vuln_density * 5.0 - path_weak_creds * 3.0
 ```
 
-`is_solvable()` vérifie : chemin entry→target, `has_loot` sur la cible, ≥1 vuln PRIVESC sur la cible. Retry ×10 automatique, fallback garanti si échec.
+`is_solvable()` vérifie : chemin entry→target, `has_loot` sur la cible (ROOT non requis — USER suffit pour `LIST_FILES`). Retry ×10 automatique, fallback garanti si échec.
 
 ### Curriculum learning
 
@@ -268,7 +314,7 @@ pip install -r requirements.txt
 ### 1. Vérifier l'installation (tests)
 
 ```bash
-# Tous les tests (395, ~4 min)
+# Tous les tests (410, ~4 min)
 pytest tests/ -q
 
 # Phase spécifique uniquement
@@ -294,7 +340,12 @@ python scripts/visualize.py --model models/mon_agent_final.zip --speed 5
 python scripts/visualize.py --pcg small --model models/pcg_small_final.zip --speed 5
 ```
 
-Contrôles : `ESPACE` pause/reprendre · `+`/`-` vitesse · `ESC` quitter
+Contrôles : `ESPACE` pause/reprendre · `+`/`-` vitesse · `←`/`→` replay · `G` jump · `Z` reset zoom · molette zoom · `R` restart · `ESC` quitter
+
+```bash
+# Avec Blue Team active et seed fixe (déterministe)
+python scripts/visualize.py --pcg medium --blue-team --speed 3 --seed 42
+```
 
 Couleurs des nœuds :
 
@@ -303,6 +354,7 @@ Couleurs des nœuds :
 - **Rouge** : session USER · **Rouge vif** : session ROOT
 - **Gris sombre** : inconnu (Fog of War) ou isolé par Blue Team
 - **Anneau vert** : nœud d'entrée (DMZ) · **Anneau gold** : cible
+- **Bouclier bleu** (coin haut-droit) : nœud sous surveillance Blue Team
 
 ### 3. Entraîner l'agent Red Team
 

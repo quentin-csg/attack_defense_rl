@@ -69,7 +69,13 @@ def make_vec_masked_env(
 
     def _make_env(i: int):
         def _init() -> ActionMasker:
-            return make_masked_env(seed=seed + i, max_steps=max_steps, blue_team=blue_team)
+            # Each sub-env gets its own ScriptedBlueTeam instance to avoid
+            # shared mutable state across parallel envs (seed offset ensures variety).
+            bt = None
+            if blue_team is not None:
+                from src.agents.blue_scripted import ScriptedBlueTeam
+                bt = ScriptedBlueTeam(seed=seed + i)
+            return make_masked_env(seed=seed + i, max_steps=max_steps, blue_team=bt)
 
         return _init
 
@@ -146,11 +152,16 @@ def make_vec_pcg_masked_env(
 
     def _make_env(i: int):
         def _init() -> ActionMasker:
+            # Each sub-env gets its own ScriptedBlueTeam instance.
+            bt = None
+            if blue_team is not None:
+                from src.agents.blue_scripted import ScriptedBlueTeam
+                bt = ScriptedBlueTeam(seed=seed + i)
             return make_pcg_masked_env(
                 size=size,
                 seed=seed + i,
                 max_steps=max_steps,
-                blue_team=blue_team,
+                blue_team=bt,
             )
         return _init
 

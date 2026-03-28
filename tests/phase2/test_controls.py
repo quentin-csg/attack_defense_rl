@@ -90,14 +90,12 @@ class TestHandleKeyEvent:
         assert consumed is True
         assert c.speed_multiplier < original
 
-    def test_r_resets(self) -> None:
+    def test_r_requests_restart(self) -> None:
         c = DashboardControls()
-        c.speed_up()
-        c.toggle_pause()
+        assert c.restart_requested is False
         consumed = handle_key_event(self._keydown(pygame.K_r), c)
         assert consumed is True
-        assert c.paused is False
-        assert c.speed_multiplier == 1.0
+        assert c.restart_requested is True
 
     def test_unrelated_key_not_consumed(self) -> None:
         c = DashboardControls()

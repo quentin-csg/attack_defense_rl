@@ -94,7 +94,7 @@ COLOR_ICON_ANTENNA: tuple[int, int, int] = (140, 140, 160) # antenna lines on ro
 # Layout — panel widths
 # ---------------------------------------------------------------------------
 LEFT_PANEL_WIDTH: int = 220    # left sidebar (stats box + collapsible panels + suspicion bars)
-RIGHT_PANEL_WIDTH: int = 250   # right action log panel
+RIGHT_PANEL_WIDTH: int = 380   # right action log panel
 
 # The graph is rendered in the centre zone between the two sidebars.
 GRAPH_AREA_LEFT: int = LEFT_PANEL_WIDTH

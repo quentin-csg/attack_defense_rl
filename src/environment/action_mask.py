@@ -146,9 +146,25 @@ def compute_action_mask(
         ):
             mask[ActionType.CLEAN_LOGS * MAX_NODES + node_id] = True
 
+    # --- LIST_FILES (ls): capture flag.txt on the target node ---
+    # Valid only when the agent is physically ON the target node with an active session.
+    target_node_id = network.target_node_id
+    if target_node_id is not None and target_node_id < MAX_NODES:
+        target_node = network.nodes.get(target_node_id)
+        if (
+            target_node is not None
+            and agent_position == target_node_id
+            and target_node.session_level != SessionLevel.NONE
+            and target_node.is_online
+            and target_node.has_loot
+        ):
+            mask[ActionType.LIST_FILES * MAX_NODES + target_node_id] = True
+
     # --- WAIT: always valid on the agent's current position ---
     # Using agent_position (not just entry_node_id) ensures the mask is never all-zero
     # even after Blue Team ROTATE_CREDENTIALS strips all sessions from the entry node.
-    mask[ActionType.WAIT * MAX_NODES + agent_position] = True
+    # Guard: agent_position must be a valid node index (defensive against invalid state).
+    wait_target = agent_position if agent_position < MAX_NODES else 0
+    mask[ActionType.WAIT * MAX_NODES + wait_target] = True
 
     return mask

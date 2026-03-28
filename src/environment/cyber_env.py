@@ -310,8 +310,8 @@ class CyberEnv(gym.Env):
         # Store as (step, text, color_key) tuple — LogEntry created lazily in _build_render_state
         self._action_log.append((self.current_step, log_text, color_key))
 
-        # Check exfiltration success
-        if action_type == ActionType.EXFILTRATE and result.success:
+        # Check exfiltration success (EXFILTRATE = fixed-network path, LIST_FILES = PCG path)
+        if action_type in (ActionType.EXFILTRATE, ActionType.LIST_FILES) and result.success:
             self.exfiltrated = True
 
         # --- Blue Team acts (after Red, before detection check) ---

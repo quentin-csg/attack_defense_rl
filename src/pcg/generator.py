@@ -135,7 +135,7 @@ _LOOT_PROB: dict[Zone, float] = {
     Zone.DMZ:        0.00,
     Zone.CORPORATE:  0.05,
     Zone.SERVER:     0.15,
-    Zone.DATACENTER: 1.00,  # always — but only the explicit target node is loot
+    Zone.DATACENTER: 1.00,  # all DC nodes carry loot (high-value zone)
 }
 
 
@@ -224,9 +224,7 @@ def _generate_attempt(
     # --- Step 4: Connect zones in sequence ---
     _connect_zones_sequential(G, subnet_node_ids, rng)
 
-    # Optionally add 1-2 cross-zone edges for medium/large
-    if size in (NetworkSize.MEDIUM, NetworkSize.LARGE) and len(subnet_node_ids) >= 3:
-        _add_cross_zone_edges(G, subnet_node_ids, rng, n_extra=1 if size == NetworkSize.MEDIUM else 2)
+    # Cross-zone shortcut edges removed — sequential + sparse intra-zone is enough
 
     # Verify connectivity
     if not nx.is_connected(G):
@@ -236,7 +234,9 @@ def _generate_attempt(
     dmz_ids = subnet_node_ids[0]       # first zone = DMZ
     dc_ids = subnet_node_ids[-1]        # last zone = DATACENTER
     entry_id = rng.choice(dmz_ids)
-    target_id = rng.choice(dc_ids)
+    # Target = DATACENTER node farthest from the entry (maximise path length)
+    bfs_lengths = nx.single_source_shortest_path_length(G, entry_id)
+    target_id = max(dc_ids, key=lambda n: bfs_lengths.get(n, 0))
 
     # --- Step 6: Assign node properties ---
     nodes: list[Node] = []
@@ -322,17 +322,20 @@ def _distribute_nodes(
     """Distribute n_nodes across zones. DMZ and DC get 2-4 each, rest split evenly."""
     n_zones = len(zone_sequence)
 
-    # DMZ and DC: 2-4 nodes each
-    dmz_count = rng.randint(2, min(4, n_nodes // n_zones + 1))
-    dc_count = rng.randint(2, min(4, n_nodes // n_zones + 1))
+    # DMZ and DC: 2-4 nodes each, but capped so middle zones always get ≥1 each
+    n_middle_zones = n_zones - 2
+    # Reserve at least 1 node per middle zone
+    max_border = max(2, (n_nodes - max(0, n_middle_zones)) // 2)
+    dmz_count = rng.randint(2, min(4, max_border))
+    dc_count = rng.randint(2, min(4, max_border))
     remaining = n_nodes - dmz_count - dc_count
 
     if remaining <= 0:
-        # Edge case: too few nodes — give 1 each to middle zones
-        middle_counts = [max(1, remaining // max(1, n_zones - 2))] * (n_zones - 2)
-        return [dmz_count] + middle_counts + [dc_count]
+        # Extreme edge case (very small network, many zones) — collapse to DMZ + DC only
+        # Trim border counts to fit all nodes
+        half = n_nodes // 2
+        return [half, n_nodes - half]
 
-    n_middle_zones = n_zones - 2
     if n_middle_zones == 0:
         # Only DMZ + DC: give all remaining to DC
         return [dmz_count, dc_count + remaining]
@@ -370,8 +373,8 @@ def _connect_subnet(G: nx.Graph, ids: list[int], rng: random.Random) -> None:
             G.add_edge(ids[0], ids[2])  # close triangle
         return
 
-    # Barabási-Albert: generate on contiguous IDs [0..n-1], then remap
-    m = min(2, n - 1)
+    # Barabási-Albert with m=1 (spanning tree — sparser, more realistic)
+    m = 1
     ba = nx.barabasi_albert_graph(n, m, seed=rng.randint(0, 2**31))
     mapping = {i: ids[i] for i in range(n)}
     for u, v in ba.edges():
@@ -391,8 +394,8 @@ def _connect_zones_sequential(
         gw_src = rng.choice(src_ids)
         gw_dst = rng.choice(dst_ids)
         G.add_edge(gw_src, gw_dst)
-        # Second gateway edge for redundancy (~60% chance)
-        if len(src_ids) >= 2 and len(dst_ids) >= 2 and rng.random() < 0.6:
+        # Second gateway edge for redundancy (~25% chance — keep graph sparse)
+        if len(src_ids) >= 2 and len(dst_ids) >= 2 and rng.random() < 0.25:
             alt_src = rng.choice([x for x in src_ids if x != gw_src])
             alt_dst = rng.choice([x for x in dst_ids if x != gw_dst])
             G.add_edge(alt_src, alt_dst)
@@ -434,8 +437,10 @@ def _make_node(
     os_type = _pick_os(zone, rng)
     services = _pick_services(os_type, rng)
     vulns = _pick_vulns(zone, is_target, rng)
-    has_weak_creds = rng.random() < _WEAK_CREDS_PROB[zone]
-    has_loot = is_target or (not is_target and rng.random() < _LOOT_PROB[zone])
+    # Target node: no weak credentials (can't brute-force), always has flag.txt.
+    # Non-target nodes never have loot — only the flag node triggers the win condition.
+    has_weak_creds = False if is_target else rng.random() < _WEAK_CREDS_PROB[zone]
+    has_loot = is_target  # only the target (flag node) has loot
 
     return Node(
         node_id=node_id,
@@ -463,31 +468,15 @@ def _pick_services(os_type: OsType, rng: random.Random) -> list[Service]:
 def _pick_vulns(zone: Zone, is_target: bool, rng: random.Random) -> list[str]:
     """Pick vulnerabilities from the zone pool.
 
-    Target nodes always get ≥1 PRIVESC vuln (required for ROOT → EXFILTRATE).
+    Target node has NO vulnerabilities — it only contains flag.txt.
+    The agent must reach it via LATERAL_MOVE and then run LIST_FILES (ls).
     Non-target nodes get 1-3 vulns from the zone pool.
     """
-    pool = _ZONE_VULN_POOLS[zone]
-    # Filter to vulns that exist in the registry
-    valid_pool = [v for v in pool if v in VULN_REGISTRY]
-
     if is_target:
-        # Must have at least 1 PRIVESC
-        privesc_pool = [
-            v for v in valid_pool
-            if VULN_REGISTRY[v].category == VulnCategory.PRIVESC
-        ]
-        if not privesc_pool:
-            # Fallback: use a generic privesc from the DATACENTER pool
-            privesc_pool = [
-                v for v in _ZONE_VULN_POOLS[Zone.DATACENTER]
-                if v in VULN_REGISTRY
-                and VULN_REGISTRY[v].category == VulnCategory.PRIVESC
-            ]
-        privesc = rng.choice(privesc_pool) if privesc_pool else "privesc_kernel"
-        extra_count = rng.randint(0, min(2, len(valid_pool) - 1))
-        extras = rng.sample([v for v in valid_pool if v != privesc], extra_count) if extra_count > 0 else []
-        return [privesc] + extras
+        return []  # no exploitable vulns — must reach via lateral movement
 
+    pool = _ZONE_VULN_POOLS[zone]
+    valid_pool = [v for v in pool if v in VULN_REGISTRY]
     n_vulns = rng.randint(1, min(3, len(valid_pool))) if valid_pool else 1
     if not valid_pool:
         return ["rce_generic"]

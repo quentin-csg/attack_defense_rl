@@ -351,7 +351,7 @@ class TestPatrol:
                 assert "No traces found" in patrol_on_0[0].details
                 assert net2.get_node(0).suspicion_level == 0.0
                 return  # test passed
-        # If patrol never hit node 0 across 50 seeds, that's fine — test is conservative
+        pytest.fail("Patrol never targeted node 0 in 50 seed attempts — increase range or fix patrol logic")
 
     def test_patrol_detection_adds_surveillance(self, fixed_network: Network) -> None:
         """Patrol that detects traces must set is_under_surveillance = True."""
@@ -372,7 +372,7 @@ class TestPatrol:
             if detected:
                 assert node.is_under_surveillance is True
                 return
-        # statistical pass if no seed hit node 0
+        pytest.fail("Patrol never detected traces on node 0 in 30 seed attempts — increase range or fix patrol logic")
 
 
 # ---------------------------------------------------------------------------

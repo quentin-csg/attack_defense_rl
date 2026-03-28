@@ -103,7 +103,7 @@ def test_action_mask_with_pcg_size(size: str) -> None:
     env.reset()
     mask = env.action_masks()
     assert mask.dtype == bool
-    assert mask.shape == (14 * MAX_NODES,)
+    assert mask.shape == (15 * MAX_NODES,)  # 15 actions after adding LIST_FILES
     # WAIT must always be valid
     assert mask.any(), "Mask is all False — no valid actions"
     env.close()
@@ -122,12 +122,13 @@ def test_episode_runs_to_completion_small() -> None:
 
     env = CyberEnv(network_factory=factory, max_steps=150, seed=42)
     obs, _ = env.reset()
+    rng = np.random.default_rng(42)
     done = False
     steps = 0
     while not done and steps < 200:
         mask = env.action_masks()
         valid = np.where(mask)[0]
-        action = int(np.random.choice(valid))
+        action = int(rng.choice(valid))
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         steps += 1
@@ -151,9 +152,10 @@ def test_blue_team_works_with_pcg_network() -> None:
     blue = ScriptedBlueTeam(seed=99)
     env = CyberEnv(network_factory=factory, max_steps=150, seed=42, blue_team=blue)
     obs, _ = env.reset()
+    rng = np.random.default_rng(99)
     mask = env.action_masks()
     valid = np.where(mask)[0]
-    action = int(np.random.choice(valid))
+    action = int(rng.choice(valid))
     obs, reward, terminated, truncated, info = env.step(action)
     assert obs is not None
     env.close()

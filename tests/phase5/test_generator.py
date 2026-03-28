@@ -143,17 +143,17 @@ class TestTarget:
                     f"{size.value} seed={seed}: target missing has_loot"
                 )
 
-    def test_target_has_privesc_vuln(self) -> None:
-        from src.environment.vulnerability import VULN_REGISTRY, VulnCategory
+    def test_target_has_no_vulns(self) -> None:
+        # With LIST_FILES win condition, target has no exploitable vulns — only flag.txt
         for seed in range(20):
             net, _ = generate_network(NetworkSize.SMALL, seed=seed)
             target = net.get_node(net.target_node_id)
-            has_privesc = any(
-                VULN_REGISTRY[v].category == VulnCategory.PRIVESC
-                for v in target.vulnerabilities
-                if v in VULN_REGISTRY
+            assert target.vulnerabilities == [], (
+                f"seed={seed}: target should have no vulns, got {target.vulnerabilities}"
             )
-            assert has_privesc, f"seed={seed}: target has no PRIVESC vuln"
+            assert target.has_weak_credentials is False, (
+                f"seed={seed}: target should have no weak credentials"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +163,13 @@ class TestTarget:
 
 class TestVulnDistribution:
     def test_nodes_have_vulns(self) -> None:
-        """Every node must have ≥1 vulnerability."""
+        """Every non-target node must have ≥1 vulnerability.
+        The target node intentionally has no vulns (win via LIST_FILES / ls).
+        """
         net, _ = generate_network(NetworkSize.MEDIUM, seed=42)
         for nid, node in net.nodes.items():
+            if nid == net.target_node_id:
+                continue  # target has no vulns by design
             assert len(node.vulnerabilities) >= 1, f"Node {nid} has no vulnerabilities"
 
     def test_vulns_in_registry(self) -> None:

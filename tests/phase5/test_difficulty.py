@@ -148,12 +148,13 @@ class TestIsSolvable:
         net.target_node_id = 2
         assert is_solvable(net) is True
 
-    def test_rejects_target_without_privesc(self) -> None:
+    def test_target_without_privesc_is_solvable(self) -> None:
+        # With LIST_FILES win condition: no PRIVESC needed on target — USER session is enough
         net = Network()
         net.add_node(Node(0, OsType.LINUX, [Service("ssh", 22)], ["rce_log4shell"]))
-        # Target has loot and RCE but no PRIVESC → can't reach ROOT
-        net.add_node(Node(1, OsType.LINUX, [Service("ssh", 22)], ["rce_log4shell"], has_loot=True))
+        # Target has loot but no PRIVESC → still solvable via LIST_FILES (ls)
+        net.add_node(Node(1, OsType.LINUX, [Service("ssh", 22)], [], has_loot=True))
         net.add_edge(0, 1)
         net.entry_node_id = 0
         net.target_node_id = 1
-        assert is_solvable(net) is False
+        assert is_solvable(net) is True

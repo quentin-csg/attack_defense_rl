@@ -108,13 +108,11 @@ def is_solvable(network: Network) -> bool:
     A network is solvable if ALL of the following hold:
 
     1. A path exists from entry_node_id to target_node_id.
-    2. The target node has has_loot = True.
-    3. The target node has at least one PRIVESC vulnerability (required
-       to obtain ROOT → then EXFILTRATE).
+    2. The target node has has_loot = True (flag.txt present).
 
-    Note: No per-node vuln check on the path is required because the Red agent
-    starts with USER session on the entry node and can traverse via
-    CREDENTIAL_DUMP + LATERAL_MOVE on any connected path.
+    Note: The new win condition is LIST_FILES (ls) on the target, which only
+    requires a USER session — obtainable via CREDENTIAL_DUMP + LATERAL_MOVE
+    along any connected path.  No PRIVESC vuln is required on the target.
 
     Args:
         network: The network to validate.
@@ -129,23 +127,9 @@ def is_solvable(network: Network) -> bool:
     if not nx.has_path(network.graph, entry, target):
         return False
 
-    # 2. Target must have loot
+    # 2. Target must have the flag (has_loot == True)
     target_node = network.get_node(target)
     if not target_node.has_loot:
-        return False
-
-    # 3. Target must have a PRIVESC vuln (needed for ROOT → EXFILTRATE).
-    #
-    # Note: no per-node exploitable-vuln check is needed because the Red agent
-    # starts with USER session on the entry node (given by reset()), and can
-    # always use CREDENTIAL_DUMP + LATERAL_MOVE to traverse a connected path.
-    # Requiring exploitable vulns on every path node would be too restrictive.
-    has_privesc = any(
-        VULN_REGISTRY[v].category == VulnCategory.PRIVESC
-        for v in target_node.vulnerabilities
-        if v in VULN_REGISTRY
-    )
-    if not has_privesc:
         return False
 
     return True

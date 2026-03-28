@@ -58,6 +58,7 @@ SUSPICION_PIVOT: float = 5.0
 SUSPICION_LATERAL_MOVE: float = 8.0
 SUSPICION_INSTALL_BACKDOOR: float = 10.0
 SUSPICION_EXFILTRATE: float = 20.0
+SUSPICION_LIST_FILES: float = 5.0   # ls on target flag node (low noise — it's just reading)
 SUSPICION_TUNNEL: float = 5.0
 SUSPICION_CLEAN_LOGS_BASE: float = -15.0  # diminishing: -15, -10, -5, -2
 SUSPICION_WAIT_DECAY: float = -3.0

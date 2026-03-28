@@ -174,10 +174,15 @@ def main() -> None:
             save_freq=args.save_freq,
             blue_team=blue_team,
         )
-        eval_env = make_masked_env(seed=args.seed + 9999, max_steps=DEFAULT_MAX_STEPS)
+        eval_env = make_masked_env(seed=args.seed + 9999, max_steps=DEFAULT_MAX_STEPS, blue_team=blue_team)
         final_label = f"{save_dir}/red_agent_final.zip"
 
     # --- Post-training evaluation ---
+    if model is None:
+        print("Training produced no model (interrupted before first update). Skipping evaluation.")
+        eval_env.close()
+        return
+
     print("\nPost-training evaluation (20 episodes)...")
     metrics = evaluate(model, eval_env, n_episodes=20, deterministic=True)
     eval_env.close()

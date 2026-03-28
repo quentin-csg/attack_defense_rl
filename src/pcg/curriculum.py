@@ -125,6 +125,9 @@ class CurriculumManager:
         Returns:
             True if the stage changed (moved to a harder stage), False otherwise.
         """
+        if self.is_complete:
+            return False
+
         self.current_world_idx += 1
         self._world_seed_offset += 1
 

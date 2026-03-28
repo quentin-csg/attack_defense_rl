@@ -526,14 +526,19 @@ def draw_special_markers(
     entry_node_id: int,
     target_node_id: int,
     positions: NodePositions,
+    anim_time: float = 0.0,
 ) -> None:
     """Draw rings around the entry (green) and target/loot (gold) nodes.
+
+    The target node gets a pulsing gold glow and a "TARGET" label so
+    the user can immediately identify the exfiltration objective.
 
     Args:
         surface: Target surface.
         entry_node_id: The DMZ/entry node (Red Team start).
         target_node_id: The data center / exfiltration target.
         positions: Pixel positions per node.
+        anim_time: Elapsed animation time (seconds) for the pulsing effect.
     """
     if entry_node_id in positions:
         pygame.draw.circle(
@@ -543,16 +548,33 @@ def draw_special_markers(
             theme.SPECIAL_MARKER_RADIUS,
             theme.MARKER_RING_WIDTH,
         )
-    # Target marker always drawn, even when entry == target (use a larger radius
-    # so both rings are visible when they overlap).
+    # Target marker: pulsing gold glow + ring + label
     if target_node_id in positions:
-        pygame.draw.circle(
-            surface,
-            theme.COLOR_TARGET_MARKER,
-            positions[target_node_id],
-            theme.SPECIAL_MARKER_RADIUS + (theme.MARKER_RING_WIDTH + 1 if target_node_id == entry_node_id else 0),
-            theme.MARKER_RING_WIDTH,
+        pos = positions[target_node_id]
+        base_r = theme.SPECIAL_MARKER_RADIUS + (
+            theme.MARKER_RING_WIDTH + 1 if target_node_id == entry_node_id else 0
         )
+
+        # Pulsing gold glow (similar to ROOT pulse but gold)
+        t = math.sin(anim_time * theme.PULSE_SPEED * 0.7)  # slightly slower than ROOT
+        glow_r = int(base_r + 4 + (t + 1) / 2 * 8)
+        glow_surf = pygame.Surface((glow_r * 2 + 2, glow_r * 2 + 2), pygame.SRCALPHA)
+        pygame.draw.circle(
+            glow_surf, (*theme.COLOR_TARGET_MARKER, 35),
+            (glow_r + 1, glow_r + 1), glow_r,
+        )
+        surface.blit(glow_surf, (pos[0] - glow_r - 1, pos[1] - glow_r - 1))
+
+        # Solid gold ring
+        pygame.draw.circle(surface, theme.COLOR_TARGET_MARKER, pos, base_r, theme.MARKER_RING_WIDTH)
+
+        # "TARGET" label above the node
+        font = _get_node_id_font()
+        if font is not None:
+            label = font.render("TARGET", True, theme.COLOR_TARGET_MARKER)
+            lx = pos[0] - label.get_width() // 2
+            ly = pos[1] - theme.NODE_BG_RADIUS - 20
+            surface.blit(label, (lx, ly))
 
 
 def draw_node_labels(
@@ -573,6 +595,57 @@ def draw_node_labels(
         lx = px - label.get_width() // 2
         ly = py + theme.NODE_BG_RADIUS + 6
         surface.blit(label, (lx, ly))
+
+
+def draw_surveillance_shields(
+    surface: pygame.Surface,
+    network: Network,
+    positions: NodePositions,
+    fogged: set[int],
+) -> None:
+    """Draw a small blue shield icon on nodes currently under Blue Team surveillance.
+
+    The shield is drawn at the top-right of the node background circle so it
+    does not overlap with the node icon or the agent halo.
+
+    Args:
+        surface: Target surface.
+        network: The network (to read is_under_surveillance per node).
+        positions: Pixel positions per node.
+        fogged: Nodes currently unknown — no shield shown for fogged nodes.
+    """
+    SHIELD_COLOR = (30, 160, 255)       # bright blue
+    SHIELD_BORDER = (180, 230, 255)     # light blue outline
+
+    for node_id, node in network.nodes.items():
+        if not node.is_under_surveillance:
+            continue
+        if node_id not in positions or node_id in fogged:
+            continue
+
+        px, py = positions[node_id]
+        # Place the shield at top-right corner of the node circle
+        cx = px + theme.NODE_BG_RADIUS - 2
+        cy = py - theme.NODE_BG_RADIUS + 2
+
+        # Shield polygon (small, ~10px tall)
+        half_w = 5
+        pts = [
+            (cx, cy - 5),       # top center
+            (cx + half_w, cy - 2),
+            (cx + half_w, cy + 2),
+            (cx, cy + 5),       # bottom tip
+            (cx - half_w, cy + 2),
+            (cx - half_w, cy - 2),
+        ]
+        shield_surf = pygame.Surface((16, 16), pygame.SRCALPHA)
+        # Offset all points so (cx, cy) maps to center of the mini surface
+        local_pts = [(x - cx + 8, y - cy + 8) for x, y in pts]
+        pygame.draw.polygon(shield_surf, SHIELD_COLOR, local_pts)
+        pygame.draw.polygon(shield_surf, SHIELD_BORDER, local_pts, 1)
+        # Small lock dot in center
+        pygame.draw.circle(shield_surf, SHIELD_BORDER, (8, 8), 1)
+        surface.blit(shield_surf, (cx - 8, cy - 8))
 
 
 def find_node_at(

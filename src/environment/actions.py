@@ -23,6 +23,7 @@ from src.config import (
     SUSPICION_ENUMERATE,
     SUSPICION_ENUMERATE_AGGRESSIVE,
     SUSPICION_EXFILTRATE,
+    SUSPICION_LIST_FILES,
     SUSPICION_EXPLOIT_MIN,
     SUSPICION_INSTALL_BACKDOOR,
     SUSPICION_LATERAL_MOVE,
@@ -59,6 +60,7 @@ class ActionType(IntEnum):
     TUNNEL = 11
     CLEAN_LOGS = 12
     WAIT = 13
+    LIST_FILES = 14  # run 'ls' on the target flag node — replaces EXFILTRATE as the win condition
 
 
 # Single source of truth — adding a new ActionType member updates everything automatically
@@ -143,6 +145,7 @@ def execute_action(
         ),
         ActionType.INSTALL_BACKDOOR: _execute_install_backdoor,
         ActionType.EXFILTRATE: _execute_exfiltrate,
+        ActionType.LIST_FILES: _execute_list_files,
         ActionType.TUNNEL: _execute_tunnel,
         ActionType.CLEAN_LOGS: _execute_clean_logs,
         ActionType.WAIT: _execute_wait,
@@ -589,6 +592,55 @@ def _execute_exfiltrate(
         reward=reward,
         suspicion_delta=susp,
         info={"action": "EXFILTRATE", "target": target_id, "had_loot": node.has_loot},
+    )
+
+
+def _execute_list_files(
+    target_id: int,
+    network: Network,
+    current_step: int,
+    rng: random.Random,
+    agent_pos: int,
+) -> ActionResult:
+    """LIST_FILES (ls): list files on the target flag node to capture the flag.
+
+    Win condition for PCG networks.  Does NOT require ROOT — reaching the node
+    via LATERAL_MOVE (USER session) is enough.  The node must have no
+    exploitable vulns (generator ensures this), so this is the only path to
+    victory.
+    """
+    node = network.get_node(target_id)
+    # Defence-in-depth: must be executed ON the actual target node
+    if target_id != network.target_node_id:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "ls", "target": target_id, "reason": "not_target_node"},
+        )
+    if node.session_level == SessionLevel.NONE:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "ls", "target": target_id, "reason": "no_session"},
+        )
+    if not node.has_loot:
+        return ActionResult(
+            success=False,
+            reward=0.0,
+            suspicion_delta=0.0,
+            info={"action": "ls", "target": target_id, "reason": "no_flag"},
+        )
+
+    susp = _apply_suspicion(node, SUSPICION_LIST_FILES, network)
+    node.detectable_traces.add("ls")
+
+    return ActionResult(
+        success=True,
+        reward=REWARD_EXFILTRATE,
+        suspicion_delta=susp,
+        info={"action": "ls (flag captured)", "target": target_id},
     )
 
 

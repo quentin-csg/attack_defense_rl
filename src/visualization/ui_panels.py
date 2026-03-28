@@ -312,17 +312,20 @@ def draw_action_log(
     rect: pygame.Rect,
     font: pygame.font.Font,
     action_log: list[LogEntry],
+    scroll_offset: int = 0,
 ) -> None:
     """Draw the scrollable action log in the right panel.
 
-    Shows the most recent entries that fit within the rect height.
-    Most recent entry is at the bottom.
+    Shows recent entries that fit within the rect height.  The caller can
+    pass ``scroll_offset > 0`` to scroll back through older entries
+    (0 = bottom/latest).
 
     Args:
         surface: Target surface.
         rect: Bounding rect for the action log panel.
         font: Small monospace font.
         action_log: List of LogEntry objects (oldest first).
+        scroll_offset: Number of entries to scroll up from the bottom.
     """
     # Panel background
     bg = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
@@ -339,17 +342,30 @@ def draw_action_log(
     usable_height = rect.height - 24
     max_lines = usable_height // line_h
 
-    # Take the last N entries that fit
-    visible = action_log[-max_lines:] if len(action_log) > max_lines else action_log
+    # Clamp scroll offset so it stays within valid bounds
+    max_scroll = max(0, len(action_log) - max_lines)
+    clamped_offset = min(scroll_offset, max_scroll)
+
+    # Compute the slice of entries to show
+    end_idx = len(action_log) - clamped_offset
+    start_idx = max(0, end_idx - max_lines)
+    visible = action_log[start_idx:end_idx]
+
     # Draw from top
     y = usable_top
     for entry in visible:
         if y + line_h > rect.bottom - 4:
             break
         color = _log_color(entry.color_key)
-        # Word-wrap: clip text to panel width
         max_chars = max(1, (rect.width - 12) // max(1, font.size("A")[0]))
         text = entry.text[:max_chars]
         txt_surf = font.render(text, True, color)
         surface.blit(txt_surf, (rect.left + 6, y))
         y += line_h
+
+    # Scroll indicator (show position if scrolled up)
+    if clamped_offset > 0:
+        indicator = font.render(
+            f"[scroll: {clamped_offset} up]", True, theme.COLOR_HINT,
+        )
+        surface.blit(indicator, (rect.left + 6, rect.bottom - 14))
