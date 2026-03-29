@@ -404,6 +404,16 @@ class CyberEnv(gym.Env):
             "detected": self._detected,
             "agent_position": self.agent_position,
             "per_node_suspicion": {nid: n.suspicion_level for nid, n in self.network.nodes.items()},
+            "network_topology": {
+                "edges": list(self.network.graph.edges())
+                + [e for edges in self.network.isolated_edges.values() for e in edges],
+                "nodes": {
+                    str(nid): {"os_type": n.os_type.name}
+                    for nid, n in self.network.nodes.items()
+                },
+                "entry_node_id": self.network.entry_node_id,
+                "target_node_id": self.network.target_node_id,
+            },
         }
 
     def _build_render_state(self) -> Any:

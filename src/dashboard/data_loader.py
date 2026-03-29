@@ -13,6 +13,26 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import streamlit as st
+
+
+# ---------------------------------------------------------------------------
+# Internal cached loader — invalidates only when the file changes on disk
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(show_spinner=False)
+def _load_metrics_cached(path: str, _mtime: float) -> pd.DataFrame:
+    """Read the full JSONL file. ``_mtime`` is used only as a cache key."""
+    records: list[dict[str, Any]] = []
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    except (OSError, json.JSONDecodeError):
+        return pd.DataFrame()
+    return pd.DataFrame(records) if records else pd.DataFrame()
 
 
 def load_metrics(
@@ -21,38 +41,28 @@ def load_metrics(
 ) -> pd.DataFrame:
     """Load the JSONL metrics file into a DataFrame.
 
+    Results are cached by file modification time — the file is only re-parsed
+    when it changes on disk, making repeated calls within a refresh instant.
+
     Args:
         path: Path to the dashboard_metrics.jsonl file.
-        last_n: If set, return only the last N rows (useful for live mode
-                where we only want the recent window).
+        last_n: If set, return only the last N rows.
 
     Returns:
         DataFrame with columns depending on event type.
-        All rows have ``type`` and ``timestep`` columns.
-        Episode rows have cyber metric columns.
-        Update rows have training metric columns.
         Returns an empty DataFrame if the file does not exist or is empty.
     """
     p = Path(path)
     if not p.exists():
         return pd.DataFrame()
 
-    records: list[dict[str, Any]] = []
-    try:
-        lines = p.read_text(encoding="utf-8").splitlines()
-        if last_n is not None:
-            lines = lines[-last_n:]
-        for line in lines:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    except (OSError, json.JSONDecodeError):
-        return pd.DataFrame()
+    mtime = p.stat().st_mtime
+    df = _load_metrics_cached(path, mtime)
 
-    if not records:
-        return pd.DataFrame()
+    if last_n is not None and not df.empty:
+        df = df.tail(last_n).reset_index(drop=True)
 
-    return pd.DataFrame(records)
+    return df
 
 
 def load_episode_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataFrame:
@@ -123,3 +133,22 @@ def load_evaluations(path: str = "logs/evaluations.npz") -> pd.DataFrame:
 def rolling_mean(series: pd.Series, window: int) -> pd.Series:
     """Compute a rolling mean, returning the series as-is if too short."""
     return series.rolling(window=min(window, max(1, len(series))), min_periods=1).mean()
+
+
+def downsample(df: pd.DataFrame, max_points: int = 1000) -> pd.DataFrame:
+    """Reduce a DataFrame to at most ``max_points`` rows by uniform sampling.
+
+    Preserves the first and last rows. Returns ``df`` unchanged if it already
+    has fewer rows than ``max_points``.
+
+    Args:
+        df: Input DataFrame.
+        max_points: Maximum number of rows to keep.
+
+    Returns:
+        Downsampled DataFrame with reset index.
+    """
+    if len(df) <= max_points:
+        return df
+    indices = np.linspace(0, len(df) - 1, max_points, dtype=int)
+    return df.iloc[indices].reset_index(drop=True)

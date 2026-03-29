@@ -11,7 +11,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src.dashboard.data_loader import rolling_mean
+from src.dashboard.data_loader import downsample, rolling_mean
 
 # ---------------------------------------------------------------------------
 # KPI Header
@@ -90,7 +90,7 @@ def render_training_curves(upd_df: pd.DataFrame, window: int = 10) -> None:
         st.info("No training update data yet. Start training to see metrics.")
         return
 
-    df = upd_df.copy()
+    df = downsample(upd_df.copy())
     x = "timestep"
 
     def _line_chart(col: str, label: str, color: str = "#4c9be8") -> None:
@@ -142,7 +142,7 @@ def render_cyber_metrics(ep_df: pd.DataFrame, window: int = 50) -> None:
         st.info("No episode data yet. Start training to see metrics.")
         return
 
-    df = ep_df.copy()
+    df = downsample(ep_df.copy())
     x = "timestep"
 
     def _dual_line(col_a: str, label_a: str, col_b: str, label_b: str) -> None:

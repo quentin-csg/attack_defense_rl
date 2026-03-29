@@ -24,6 +24,7 @@ Layout:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -89,6 +90,7 @@ if _runs:
     _run_dir = _logs_root / selected_run
     metrics_path = str(_run_dir / "dashboard_metrics.jsonl")
     eval_path = str(_run_dir / "evaluations.npz")
+    topo_path = str(_run_dir / "network_topology.json")
     st.sidebar.caption(f"Run: `{selected_run}`")
 else:
     metrics_path = st.sidebar.text_input(
@@ -101,6 +103,7 @@ else:
         value="logs/evaluations.npz",
         help="Path to the evaluations.npz written by MaskableEvalCallback.",
     )
+    topo_path = str(Path(metrics_path).parent / "network_topology.json")
 
 window = st.sidebar.slider(
     "Rolling window (episodes)",
@@ -201,7 +204,16 @@ with col_graph:
         last_susp = ep_df["per_node_suspicion"].dropna()
         if not last_susp.empty and isinstance(last_susp.iloc[-1], dict):
             suspicion_data = {int(k): float(v) for k, v in last_susp.iloc[-1].items()}
-    render_network_graph(suspicion_data=suspicion_data)
+
+    topology_data: dict | None = None
+    _topo_file = Path(topo_path)
+    if _topo_file.exists():
+        try:
+            topology_data = json.loads(_topo_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            topology_data = None
+
+    render_network_graph(suspicion_data=suspicion_data, topology_data=topology_data)
 
 with col_eval:
     render_eval_curves(eval_df)

@@ -1,7 +1,8 @@
 """NetworkX graph rendering for the Streamlit training dashboard.
 
-Renders the fixed 8-node enterprise network as an interactive Plotly figure,
-with nodes coloured by suspicion level (green → yellow → red scale).
+Renders the network as an interactive Plotly figure, with nodes coloured by
+suspicion level (green -> yellow -> red scale). Supports both the fixed 8-node
+network and dynamically generated PCG networks (small/medium/large).
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.environment.network import Network, build_fixed_network
-from src.environment.node import OsType, SessionLevel
+from src.environment.node import Node, OsType, SessionLevel
 
 
 # Suspicion colour thresholds (matches Pygame theme)
@@ -55,24 +56,63 @@ _NODE_LABELS = {
 }
 
 
+def _network_from_topology(topo: dict) -> Network:
+    """Reconstruct a minimal Network object from serialised topology data.
+
+    Args:
+        topo: Dict with keys ``edges``, ``nodes``, ``entry_node_id``,
+              ``target_node_id`` as produced by ``CyberEnv._get_info()``.
+
+    Returns:
+        A Network instance with nodes and edges set up for rendering.
+        Services and vulnerabilities are left empty (not needed for display).
+    """
+    net = Network()
+    for str_nid, attrs in topo.get("nodes", {}).items():
+        nid = int(str_nid)
+        os_type = OsType[attrs.get("os_type", "LINUX")]
+        node = Node(node_id=nid, os_type=os_type, services=[], vulnerabilities=[])
+        net.nodes[nid] = node
+        net.graph.add_node(nid)
+
+    for edge in topo.get("edges", []):
+        u, v = int(edge[0]), int(edge[1])
+        if u in net.nodes and v in net.nodes:
+            net.graph.add_edge(u, v)
+
+    net.entry_node_id = topo.get("entry_node_id", 0)
+    net.target_node_id = topo.get("target_node_id", 0)
+    return net
+
+
 def render_network_graph(
     network: Network | None = None,
     suspicion_data: dict[int, float] | None = None,
+    topology_data: dict | None = None,
     seed: int = 42,
 ) -> None:
     """Render the network graph as an interactive Plotly chart in Streamlit.
 
     Args:
-        network: The Network to visualise. If None, builds the default fixed network.
-        suspicion_data: Optional dict mapping node_id → suspicion level (0-100).
+        network: The Network to visualise. Overrides topology_data if provided.
+        suspicion_data: Optional dict mapping node_id -> suspicion level (0-100).
                         When provided, nodes are coloured by suspicion.
                         When None, nodes are coloured by session level.
+        topology_data: Serialised topology dict from ``CyberEnv._get_info()``.
+                       Used when network is None and topology_data is available.
+                       Falls back to the fixed network if both are None.
         seed: Layout seed for reproducible spring_layout positions.
     """
     st.subheader("Network Graph")
 
     if network is None:
-        network = build_fixed_network(seed=seed)
+        if topology_data is not None:
+            network = _network_from_topology(topology_data)
+        else:
+            network = build_fixed_network(seed=seed)
+
+    entry_id = getattr(network, "entry_node_id", None)
+    target_id = getattr(network, "target_node_id", None)
 
     # Compute layout positions
     pos: dict[int, tuple[float, float]] = nx.spring_layout(network.graph, seed=seed)
@@ -95,7 +135,7 @@ def render_network_graph(
         showlegend=False,
     )
 
-    # Build node traces per OS type so we can use different symbols
+    # Build node traces per node so we can use different symbols and border colours
     node_traces: list[go.Scatter] = []
     for node_id, node in network.nodes.items():
         x, y = pos[node_id]
@@ -105,10 +145,28 @@ def render_network_graph(
         else:
             color = _session_color(node.session_level)
 
+        # Border colour: green for entry, red for target, dark otherwise
+        if node_id == entry_id:
+            border_color = "#00ff88"
+            border_width = 3
+        elif node_id == target_id:
+            border_color = "#ff4444"
+            border_width = 3
+        else:
+            border_color = "#1a1a2e"
+            border_width = 2
+
         susp_val = suspicion_data.get(node_id, 0.0) if suspicion_data else node.suspicion_level
         label = _NODE_LABELS.get(node_id, f"Node {node_id}")
+
+        role = ""
+        if node_id == entry_id:
+            role = " [ENTRY]"
+        elif node_id == target_id:
+            role = " [TARGET]"
+
         hover = (
-            f"<b>{label}</b><br>"
+            f"<b>{label}{role}</b><br>"
             f"OS: {node.os_type.name}<br>"
             f"Suspicion: {susp_val:.0f}%<br>"
             f"Session: {node.session_level.name}<br>"
@@ -124,7 +182,7 @@ def render_network_graph(
                 size=22,
                 color=color,
                 symbol=symbol,
-                line=dict(width=2, color="#1a1a2e"),
+                line=dict(width=border_width, color=border_color),
             ),
             text=[label],
             textposition="bottom center",
@@ -147,13 +205,15 @@ def render_network_graph(
         ),
     )
 
-    # Legend for node colours
+    # Legend for node colours + special borders
     legend_html = (
         "<div style='display:flex;gap:16px;font-size:12px;color:#ccc;margin-bottom:4px'>"
         "<span style='color:#4caf7d'>● Low suspicion</span>"
         "<span style='color:#f9e45a'>● Medium</span>"
         "<span style='color:#f4a261'>● High</span>"
         "<span style='color:#e05252'>● Critical</span>"
+        "<span style='color:#00ff88'>◎ Entry</span>"
+        "<span style='color:#ff4444'>◎ Target</span>"
         "</div>"
     )
     st.markdown(legend_html, unsafe_allow_html=True)

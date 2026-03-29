@@ -122,6 +122,7 @@ class DashboardCallback(BaseCallback):
     ) -> None:
         super().__init__(verbose)
         self._log_path = Path(log_path)
+        self._topo_path = Path(log_path).parent / "network_topology.json"
         self._reset_on_start = reset_on_start
         self._file: Any = None
         self._last_update_timestep: int = -1
@@ -163,6 +164,15 @@ class DashboardCallback(BaseCallback):
                 },
             }
             self._write(record)
+
+            # Write topology to a separate small file (overwrite each episode).
+            # Kept out of the JSONL to avoid bloating it with redundant topology data.
+            topo = terminal_info.get("network_topology")
+            if topo is not None:
+                try:
+                    self._topo_path.write_text(json.dumps(topo), encoding="utf-8")
+                except OSError:
+                    pass
 
         # Capture train metrics from logger after each PPO update.
         # SB3 flushes name_to_value after dump() — check by timestep change.
