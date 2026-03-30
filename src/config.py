@@ -137,10 +137,10 @@ PCG_STEPS_PER_HOP: int = 15
 PCG_STEPS_PER_NODE: int = 2
 
 # Curriculum learning
-CURRICULUM_WORLDS_PER_STAGE: int = 10
+CURRICULUM_WORLDS_PER_STAGE: int = 20
 CURRICULUM_TIMESTEPS_SMALL: int = 100_000
 CURRICULUM_TIMESTEPS_MEDIUM: int = 150_000
-CURRICULUM_TIMESTEPS_LARGE: int = 200_000
+CURRICULUM_TIMESTEPS_LARGE: int = 300_000
 
 # ---------------------------------------------------------------------------
 # Episode limits
