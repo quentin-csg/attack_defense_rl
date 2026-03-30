@@ -32,13 +32,23 @@ N_GLOBAL_FEATURES: int = 3
 # ---------------------------------------------------------------------------
 # Rewards  (CORRECTION 4 — calibrated values)
 # ---------------------------------------------------------------------------
-REWARD_EXFILTRATE: float = 150.0  # ratio = 150 / (0.5 * 200) = 1.5 > 1
+REWARD_EXFILTRATE: float = 150.0  # used for fixed network (backward compat)
+# Dynamic exfiltrate reward for PCG: ratio × |PER_STEP × max_steps| — always > 1.
+# => Small (150 steps): 2.0 × 0.5 × 150 = 150  (same as fixed)
+# => Medium (250 steps): 2.0 × 0.5 × 250 = 250
+# => Large (350 steps):  2.0 × 0.5 × 350 = 350
+REWARD_EXFILTRATE_RATIO: float = 2.0
 REWARD_PER_STEP: float = -0.5
-REWARD_DETECTED: float = -50.0
+REWARD_DETECTED: float = -50.0          # floor (used for fixed network + small budgets)
+REWARD_DETECTED_RATIO: float = 1 / 3   # detection penalty as fraction of exfiltrate reward
 REWARD_NEW_NODE_DISCOVERED: float = 2.0
 REWARD_NEW_NODE_COMPROMISED: float = 5.0
 REWARD_ROOT_OBTAINED: float = 10.0
-REWARD_REPEATED_ACTION: float = -1.0
+# Reference network size for normalising exploration rewards.
+# Keeps total discovery + compromise budget constant across sizes:
+# scale = min(1.0, REWARD_EXPLORATION_NODES / n_nodes)
+REWARD_EXPLORATION_NODES: int = 20
+REWARD_REPEATED_ACTION: float = -2.0
 
 # ---------------------------------------------------------------------------
 # Suspicion
@@ -119,7 +129,7 @@ PCG_LARGE_SUBNETS: tuple[int, int] = (7, 8)
 # max_steps par taille (par défaut — compute_max_steps() peut affiner)
 PCG_MAX_STEPS_SMALL: int = 150
 PCG_MAX_STEPS_MEDIUM: int = 250
-PCG_MAX_STEPS_LARGE: int = 350
+PCG_MAX_STEPS_LARGE: int = 400
 
 # Score de difficulté — coefficients
 PCG_BASE_STEPS: int = 40
@@ -127,7 +137,7 @@ PCG_STEPS_PER_HOP: int = 15
 PCG_STEPS_PER_NODE: int = 2
 
 # Curriculum learning
-CURRICULUM_WORLDS_PER_STAGE: int = 5
+CURRICULUM_WORLDS_PER_STAGE: int = 10
 CURRICULUM_TIMESTEPS_SMALL: int = 100_000
 CURRICULUM_TIMESTEPS_MEDIUM: int = 150_000
 CURRICULUM_TIMESTEPS_LARGE: int = 200_000

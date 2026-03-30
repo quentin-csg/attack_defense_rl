@@ -23,8 +23,15 @@ from src.config import (
     N_GLOBAL_FEATURES,
     N_NODE_FEATURES,
     REWARD_DETECTED,
+    REWARD_DETECTED_RATIO,
+    REWARD_EXFILTRATE,
+    REWARD_EXFILTRATE_RATIO,
+    REWARD_EXPLORATION_NODES,
+    REWARD_NEW_NODE_COMPROMISED,
+    REWARD_NEW_NODE_DISCOVERED,
     REWARD_PER_STEP,
     REWARD_REPEATED_ACTION,
+    REWARD_ROOT_OBTAINED,
     SUSPICION_MAX,
 )
 from src.environment.action_mask import compute_action_mask
@@ -152,6 +159,29 @@ class CyberEnv(gym.Env):
 
         self.action_space = spaces.Discrete(N_ACTION_TYPES * MAX_NODES)
 
+        # Dynamic exfiltrate reward — scales with episode budget so the ratio
+        # REWARD_EXFILTRATE_RATIO × |PER_STEP × max_steps| > 1 always holds.
+        # Floor at REWARD_EXFILTRATE (150) for short test budgets (max_steps < 150).
+        self._exfiltrate_reward: float = max(
+            REWARD_EXFILTRATE,
+            REWARD_EXFILTRATE_RATIO * abs(REWARD_PER_STEP) * self.max_steps,
+        )
+
+        # Dynamic detection penalty — scales proportionally with the win reward so
+        # risk/reward ratio stays constant across network sizes.
+        # Floor at abs(REWARD_DETECTED)=50 for backward compat with fixed network.
+        # Small(150): -max(50,50)=-50  Medium(250): -max(50,83)=-83  Large(400): -max(50,133)=-133
+        self._detected_reward: float = -max(
+            abs(REWARD_DETECTED),
+            REWARD_DETECTED_RATIO * self._exfiltrate_reward,
+        )
+
+        # Exploration reward scale — normalises total discovery/compromise budget
+        # to ~REWARD_EXPLORATION_NODES nodes' worth, so large networks don't give
+        # more exploration reward than the win reward.
+        # scale = min(1.0, 20 / n_nodes):  Small(12)→1.0  Medium(27)→0.74  Large(55)→0.36
+        self._exploration_scale: float = min(1.0, REWARD_EXPLORATION_NODES / self.network.num_nodes)
+
         # Episode state
         self.current_step: int = 0
         self.agent_position: int = 0
@@ -206,6 +236,8 @@ class CyberEnv(gym.Env):
         if self._network_factory is not None:
             episode_seed = self._rng.randint(0, 2**31)
             self.network = self._network_factory(episode_seed)
+            # Recompute exploration scale for the new topology
+            self._exploration_scale = min(1.0, REWARD_EXPLORATION_NODES / self.network.num_nodes)
 
         # Reset network state (node suspicion, sessions, etc.)
         self.network.reset_all_nodes()
@@ -265,6 +297,13 @@ class CyberEnv(gym.Env):
             reward += REWARD_REPEATED_ACTION
         self.last_action = action
 
+        # Snapshot node states for exploration reward scaling (only when scale < 1)
+        if self._exploration_scale < 1.0:
+            _pre_disc = {nid: n.discovery_level for nid, n in self.network.nodes.items()}
+            _pre_sess = {nid: n.session_level for nid, n in self.network.nodes.items()}
+        else:
+            _pre_disc = _pre_sess = None
+
         # Validate target exists
         if target_node_id not in self.network.nodes:
             # Invalid target — treat as failed WAIT
@@ -285,6 +324,23 @@ class CyberEnv(gym.Env):
             )
 
         reward += result.reward
+
+        # Scale exfiltrate reward dynamically with episode budget (CORRECTION 4 extension).
+        if action_type in (ActionType.EXFILTRATE, ActionType.LIST_FILES) and result.success:
+            reward += self._exfiltrate_reward - REWARD_EXFILTRATE
+
+        # Scale exploration rewards for large networks (Issue 7 balance fix).
+        # actions.py uses fixed constants; we apply a negative correction so
+        # total discovery+compromise budget stays ~constant across network sizes.
+        if _pre_disc is not None:
+            scale_adj = self._exploration_scale - 1.0  # negative for large networks
+            for nid, node in self.network.nodes.items():
+                if _pre_disc[nid] == DiscoveryLevel.UNKNOWN and node.discovery_level != DiscoveryLevel.UNKNOWN:
+                    reward += REWARD_NEW_NODE_DISCOVERED * scale_adj
+                if _pre_sess[nid] == SessionLevel.NONE and node.session_level != SessionLevel.NONE:  # type: ignore[index]
+                    reward += REWARD_NEW_NODE_COMPROMISED * scale_adj
+                if _pre_sess[nid] == SessionLevel.USER and node.session_level == SessionLevel.ROOT:  # type: ignore[index]
+                    reward += REWARD_ROOT_OBTAINED * scale_adj
 
         # Track credential dumps
         if action_type == ActionType.CREDENTIAL_DUMP and result.success:
@@ -340,7 +396,7 @@ class CyberEnv(gym.Env):
             and any(n.suspicion_level >= SUSPICION_MAX for n in self.network.nodes.values())
         )
         if detected:
-            reward += REWARD_DETECTED
+            reward += self._detected_reward
             self._detected = True
 
         self.episode_reward += reward

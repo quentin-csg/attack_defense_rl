@@ -55,9 +55,17 @@ class ScriptedBlueTeam:
                          Configurable for Phase 6 dynamic handicap.
     """
 
-    def __init__(self, seed: int = 42, patrol_interval: int = PATROL_INTERVAL) -> None:
+    def __init__(
+        self,
+        seed: int = 42,
+        patrol_interval: int = PATROL_INTERVAL,
+        isolate_duration: int | None = None,
+    ) -> None:
         self._rng = random.Random(seed)
         self._patrol_interval = patrol_interval
+        # Isolation duration: None → use config default. Pass max_steps // 25 from
+        # the env wrapper so large episodes have proportionally longer isolations.
+        self._isolate_duration: int = isolate_duration if isolate_duration is not None else BLUE_ISOLATE_DURATION
         self._isolated_at: dict[int, int] = {}   # node_id -> step it was isolated
         self._last_rotate: dict[int, int] = {}   # node_id -> last step ROTATE fired
         self._surveillance_logged: set[int] = set()  # nodes already logged as under surveillance
@@ -95,7 +103,7 @@ class ScriptedBlueTeam:
         # 0. Auto-restore isolated nodes whose duration has elapsed (A6)
         to_restore = [
             nid for nid, step in self._isolated_at.items()
-            if current_step - step >= BLUE_ISOLATE_DURATION
+            if current_step - step >= self._isolate_duration
         ]
         for nid in to_restore:
             network.restore_node(nid)
@@ -104,7 +112,7 @@ class ScriptedBlueTeam:
             was_logged = nid in self._surveillance_logged
             self._surveillance_logged.discard(nid)
             del self._isolated_at[nid]
-            detail = f"Isolation expired after {BLUE_ISOLATE_DURATION} steps"
+            detail = f"Isolation expired after {self._isolate_duration} steps"
             if was_logged:
                 detail += " — surveillance lifted"
             actions.append(BlueAction(
@@ -113,9 +121,16 @@ class ScriptedBlueTeam:
                 details=detail,
             ))
 
-        # 1. Stochastic patrol (CORRECTION 3 — Poisson, not deterministic)
-        if self._rng.random() < 1.0 / self._patrol_interval:
-            patrol_action = self._patrol(network)
+        # 1. Stochastic patrol (CORRECTION 3 — Poisson, not deterministic).
+        # Scale patrol frequency with network size so per-node coverage stays
+        # roughly constant: scale = max(1, n_online // 10).
+        # Small (~12 nodes): scale=1, prob=1/5=0.20 (unchanged)
+        # Medium (~27 nodes): scale=2, prob=2/5=0.40
+        # Large (~55 nodes):  scale=5, prob=5/5=1.00 (every step)
+        online_nodes = [nid for nid, n in network.nodes.items() if n.is_online]
+        patrol_scale = max(1, len(online_nodes) // 10)
+        if self._rng.random() < patrol_scale / self._patrol_interval:
+            patrol_action = self._patrol_from(network, online_nodes)
             if patrol_action is not None:
                 actions.append(patrol_action)
 
@@ -162,13 +177,16 @@ class ScriptedBlueTeam:
     # Action implementations
     # ------------------------------------------------------------------
 
-    def _patrol(self, network: Network) -> BlueAction | None:
+    def _patrol_from(self, network: Network, online_nodes: list[int]) -> BlueAction | None:
         """Inspect a random online node for detectable Red traces.
 
         If traces are found: add PATROL_DETECTION_SUSPICION and mark the
         node under surveillance (future Red actions = suspicion x2).
+
+        Args:
+            network: Current network state.
+            online_nodes: Pre-computed list of online node IDs (avoids re-scan).
         """
-        online_nodes = [nid for nid, n in network.nodes.items() if n.is_online]
         if not online_nodes:
             return None
 
@@ -239,7 +257,7 @@ class ScriptedBlueTeam:
         )
 
     def _isolate(self, network: Network, node_id: int, current_step: int) -> BlueAction:
-        """Disconnect a node from the network (auto-restores after BLUE_ISOLATE_DURATION)."""
+        """Disconnect a node from the network (auto-restores after self._isolate_duration steps)."""
         node = network.get_node(node_id)
         network.isolate_node(node_id)
         self._isolated_at[node_id] = current_step

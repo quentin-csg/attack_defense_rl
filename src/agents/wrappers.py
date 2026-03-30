@@ -74,7 +74,11 @@ def make_vec_masked_env(
             bt = None
             if blue_team is not None:
                 from src.agents.blue_scripted import ScriptedBlueTeam
-                bt = ScriptedBlueTeam(seed=seed + i)
+                from src.config import BLUE_ISOLATE_DURATION
+                bt = ScriptedBlueTeam(
+                    seed=seed + i,
+                    isolate_duration=max(BLUE_ISOLATE_DURATION, max_steps // 25),
+                )
             return make_masked_env(seed=seed + i, max_steps=max_steps, blue_team=bt)
 
         return _init
@@ -156,7 +160,17 @@ def make_vec_pcg_masked_env(
             bt = None
             if blue_team is not None:
                 from src.agents.blue_scripted import ScriptedBlueTeam
-                bt = ScriptedBlueTeam(seed=seed + i)
+                from src.config import BLUE_ISOLATE_DURATION, PCG_MAX_STEPS_LARGE, PCG_MAX_STEPS_MEDIUM, PCG_MAX_STEPS_SMALL
+                from src.pcg.generator import NetworkSize
+                _resolved = max_steps if max_steps is not None else {
+                    NetworkSize.SMALL: PCG_MAX_STEPS_SMALL,
+                    NetworkSize.MEDIUM: PCG_MAX_STEPS_MEDIUM,
+                    NetworkSize.LARGE: PCG_MAX_STEPS_LARGE,
+                }[NetworkSize(size)]
+                bt = ScriptedBlueTeam(
+                    seed=seed + i,
+                    isolate_duration=max(BLUE_ISOLATE_DURATION, _resolved // 25),
+                )
             return make_pcg_masked_env(
                 size=size,
                 seed=seed + i,

@@ -242,7 +242,7 @@ def _generate_attempt(
     nodes: list[Node] = []
     for nid in range(total_nodes):
         zone = zone_map[nid]
-        node = _make_node(nid, zone, nid == target_id, rng)
+        node = _make_node(nid, zone, nid == target_id, rng, total_nodes=total_nodes)
         nodes.append(node)
 
     # --- Step 7: Build Network object ---
@@ -380,6 +380,20 @@ def _connect_subnet(G: nx.Graph, ids: list[int], rng: random.Random) -> None:
     for u, v in ba.edges():
         G.add_edge(mapping[u], mapping[v])
 
+    # Add extra intra-zone edges for subnets > 5 nodes to increase lateral
+    # movement diversity: 1 extra edge per additional 5-node block.
+    # Small zones (≤5): +0 edges.  Medium zones (~8): +0-1.  Large zones (~15): +2.
+    extra = max(0, (n - 5) // 5)
+    candidates = [(ids[i], ids[j]) for i in range(n) for j in range(i + 1, n)]
+    rng.shuffle(candidates)
+    added = 0
+    for u, v in candidates:
+        if added >= extra:
+            break
+        if not G.has_edge(u, v):
+            G.add_edge(u, v)
+            added += 1
+
 
 def _connect_zones_sequential(
     G: nx.Graph,
@@ -394,8 +408,11 @@ def _connect_zones_sequential(
         gw_src = rng.choice(src_ids)
         gw_dst = rng.choice(dst_ids)
         G.add_edge(gw_src, gw_dst)
-        # Second gateway edge for redundancy (~25% chance — keep graph sparse)
-        if len(src_ids) >= 2 and len(dst_ids) >= 2 and rng.random() < 0.25:
+        # Second gateway edge — probability scales with zone sizes so larger zones
+        # have more cross-zone paths and fewer forced bottlenecks.
+        # Small zones (4+4=8): ~0.40  |  Large zones (15+15=30): ~0.75 (capped)
+        prob_2nd = min(0.75, (len(src_ids) + len(dst_ids)) / 20.0)
+        if len(src_ids) >= 2 and len(dst_ids) >= 2 and rng.random() < prob_2nd:
             alt_src = rng.choice([x for x in src_ids if x != gw_src])
             alt_dst = rng.choice([x for x in dst_ids if x != gw_dst])
             G.add_edge(alt_src, alt_dst)
@@ -432,14 +449,29 @@ def _make_node(
     zone: Zone,
     is_target: bool,
     rng: random.Random,
+    total_nodes: int = 20,
 ) -> Node:
-    """Create a Node with zone-appropriate properties."""
+    """Create a Node with zone-appropriate properties.
+
+    Args:
+        node_id: Unique node identifier.
+        zone: Network zone (DMZ / CORPORATE / SERVER / DATACENTER).
+        is_target: True if this is the flag node (no vulns, no weak creds).
+        rng: Random number generator.
+        total_nodes: Total nodes in the network — used to scale weak-credential
+            probability so large networks don't have proportionally more
+            brute-forceable nodes than small ones.
+    """
     os_type = _pick_os(zone, rng)
     services = _pick_services(os_type, rng)
     vulns = _pick_vulns(zone, is_target, rng)
+    # Scale weak-cred probability so absolute count stays ~constant across sizes.
+    # scale = min(1.0, 20 / total_nodes): Small(12)→1.0  Large(55)→0.36
+    _WEAK_CREDS_SCALE_NODES: int = 20
+    weak_creds_prob = _WEAK_CREDS_PROB[zone] * min(1.0, _WEAK_CREDS_SCALE_NODES / total_nodes)
     # Target node: no weak credentials (can't brute-force), always has flag.txt.
     # Non-target nodes never have loot — only the flag node triggers the win condition.
-    has_weak_creds = False if is_target else rng.random() < _WEAK_CREDS_PROB[zone]
+    has_weak_creds = False if is_target else rng.random() < weak_creds_prob
     has_loot = is_target  # only the target (flag node) has loot
 
     return Node(
