@@ -137,10 +137,10 @@ PCG_STEPS_PER_HOP: int = 15
 PCG_STEPS_PER_NODE: int = 2
 
 # Curriculum learning
-CURRICULUM_WORLDS_PER_STAGE: int = 20
-CURRICULUM_TIMESTEPS_SMALL: int = 100_000
-CURRICULUM_TIMESTEPS_MEDIUM: int = 150_000
-CURRICULUM_TIMESTEPS_LARGE: int = 300_000
+CURRICULUM_WORLDS_PER_STAGE: int = 40
+CURRICULUM_TIMESTEPS_SMALL: int = 200_000
+CURRICULUM_TIMESTEPS_MEDIUM: int = 400_000
+CURRICULUM_TIMESTEPS_LARGE: int = 1_000_000
 
 # ---------------------------------------------------------------------------
 # Episode limits
@@ -164,7 +164,7 @@ RL_GAMMA: float = 0.99          # discount factor
 RL_CLIP_RANGE: float = 0.2      # PPO clipping parameter
 RL_NET_ARCH: tuple[int, ...] = (256, 256)  # hidden layers for policy + value networks
 RL_TOTAL_TIMESTEPS: int = 500_000    # default training budget
-RL_SAVE_FREQ: int = 10_000          # checkpoint every N env steps
+RL_SAVE_FREQ: int = 500_000          # checkpoint every N env steps (5× less than before to reduce storage)
 RL_LOG_INTERVAL: int = 1            # log every N rollouts
-RL_EVAL_FREQ: int = 5_000           # evaluate every N env steps
+RL_EVAL_FREQ: int = 25_000          # evaluate every N env steps (5× less than before to reduce log volume)
 RL_EVAL_EPISODES: int = 20          # episodes per evaluation run
