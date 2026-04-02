@@ -1,11 +1,3 @@
-"""User interaction controls for the Pygame dashboard.
-
-DashboardControls holds the mutable UI state (pause, speed).
-handle_key_event() updates it in response to keyboard input.
-The visualize.py script reads controls.paused and controls.speed_multiplier
-to decide whether to step the environment and how long to sleep between steps.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,17 +10,7 @@ _SPEED_PRESETS: list[float] = [0.25, 0.5, 1.0, 2.0, 4.0]
 
 @dataclass
 class DashboardControls:
-    """Mutable UI state for the visualisation script.
-
-    Attributes:
-        paused: When True, env.step() is not called and the display is refreshed
-            at idle rate (still responsive to events).
-        speed_multiplier: Effective speed relative to base delay. 1.0 = normal,
-            2.0 = twice as fast (half the sleep time), 0.5 = slower.
-        restart_requested: Set to True when the user presses R. The main loop
-            checks this flag and restarts the episode when it is True.
-        _speed_idx: Index into _SPEED_PRESETS for cycling.
-    """
+    """Mutable UI state for the visualisation script."""
 
     paused: bool = False
     speed_multiplier: float = 1.0
@@ -57,15 +39,7 @@ class DashboardControls:
 
 
 def handle_key_event(event: pygame.event.Event, controls: DashboardControls) -> bool:
-    """Process a KEYDOWN event and update controls accordingly.
-
-    Args:
-        event: A pygame KEYDOWN event.
-        controls: The DashboardControls instance to mutate.
-
-    Returns:
-        True if the event was consumed (relevant key), False otherwise.
-    """
+    """Process a KEYDOWN event and update controls accordingly."""
     if event.type != pygame.KEYDOWN:
         return False
 

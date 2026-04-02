@@ -1,13 +1,3 @@
-"""PCG network generator for Phase 5.
-
-Generates randomised enterprise-topology networks in three sizes:
-  - Small  : 10-15 nodes, 2-3 subnets
-  - Medium : 25-30 nodes, 4-5 subnets
-  - Large  : 50-60 nodes, 7-8 subnets
-
-Zone structure: DMZ → CORPORATE → SERVER → DATACENTER (target).
-"""
-
 from __future__ import annotations
 
 import logging

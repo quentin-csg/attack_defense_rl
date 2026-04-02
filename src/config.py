@@ -1,9 +1,3 @@
-"""Global constants, hyperparameters, and reward values.
-
-All magic numbers live here. If a value is used in more than one file,
-it MUST be defined here — no inline literals.
-"""
-
 MAX_NODES: int = 64
 DEFAULT_NETWORK_SIZE: int = 8
 

@@ -1,9 +1,3 @@
-"""Pygame window manager for the Attack & Defense RL visualization.
-
-PygameRenderer owns the Pygame window lifecycle and orchestrates the
-drawing calls. Created lazily by CyberEnv on the first render() call.
-"""
-
 from __future__ import annotations
 
 import copy

@@ -26,19 +26,7 @@ def load_metrics(
     path: str = "logs/dashboard_metrics.jsonl",
     last_n: int | None = None,
 ) -> pd.DataFrame:
-    """Load the JSONL metrics file into a DataFrame.
-
-    Results are cached by file modification time — the file is only re-parsed
-    when it changes on disk, making repeated calls within a refresh instant.
-
-    Args:
-        path: Path to the dashboard_metrics.jsonl file.
-        last_n: If set, return only the last N rows.
-
-    Returns:
-        DataFrame with columns depending on event type.
-        Returns an empty DataFrame if the file does not exist or is empty.
-    """
+    """Load the JSONL metrics file into a DataFrame."""
     p = Path(path)
     if not p.exists():
         return pd.DataFrame()
@@ -53,13 +41,7 @@ def load_metrics(
 
 
 def load_episode_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataFrame:
-    """Load only episode-type rows from the JSONL file.
-
-    Returns:
-        DataFrame with columns: timestep, wall_time, exfiltrated, detected,
-        n_compromised, max_suspicion, episode_length, episode_reward.
-        Empty DataFrame if no episode events exist.
-    """
+    """Load only episode-type rows from the JSONL file."""
     df = load_metrics(path)
     if df.empty or "type" not in df.columns:
         return pd.DataFrame()
@@ -68,14 +50,7 @@ def load_episode_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataF
 
 
 def load_update_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataFrame:
-    """Load only update-type rows (PPO training metrics) from the JSONL file.
-
-    Returns:
-        DataFrame with columns: timestep, wall_time, entropy_loss,
-        policy_gradient_loss, value_loss, approx_kl, clip_fraction,
-        explained_variance, learning_rate.
-        Empty DataFrame if no update events exist.
-    """
+    """Load only update-type rows (PPO training metrics) from the JSONL file."""
     df = load_metrics(path)
     if df.empty or "type" not in df.columns:
         return pd.DataFrame()
@@ -84,15 +59,7 @@ def load_update_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataFr
 
 
 def load_evaluations(path: str = "logs/evaluations.npz") -> pd.DataFrame:
-    """Load the MaskableEvalCallback evaluations.npz file.
-
-    Args:
-        path: Path to evaluations.npz.
-
-    Returns:
-        DataFrame with columns: timestep, mean_reward, std_reward, mean_length, std_length.
-        Empty DataFrame if the file does not exist.
-    """
+    """Load the MaskableEvalCallback evaluations.npz file."""
     p = Path(path)
     if not p.exists():
         return pd.DataFrame()
@@ -123,18 +90,7 @@ def rolling_mean(series: pd.Series, window: int) -> pd.Series:
 
 
 def downsample(df: pd.DataFrame, max_points: int = 1000) -> pd.DataFrame:
-    """Reduce a DataFrame to at most ``max_points`` rows by uniform sampling.
-
-    Preserves the first and last rows. Returns ``df`` unchanged if it already
-    has fewer rows than ``max_points``.
-
-    Args:
-        df: Input DataFrame.
-        max_points: Maximum number of rows to keep.
-
-    Returns:
-        Downsampled DataFrame with reset index.
-    """
+    """Reduce a DataFrame to at most ``max_points`` rows by uniform sampling."""
     if len(df) <= max_points:
         return df
     indices = np.linspace(0, len(df) - 1, max_points, dtype=int)

@@ -1,5 +1,3 @@
-"""CyberEnv — Gymnasium environment for the attack/defense RL project."""
-
 from __future__ import annotations
 
 import logging
@@ -52,19 +50,7 @@ _MOVEMENT_ACTIONS: frozenset[ActionType] = frozenset({
 
 
 class CyberEnv(gym.Env):
-    """Gymnasium environment for Red Team cyber attack simulation.
-
-    Observation space (Dict):
-        - node_features: Box(MAX_NODES, N_NODE_FEATURES)
-        - adjacency: Box(MAX_NODES, MAX_NODES)
-        - node_exists_mask: MultiBinary(MAX_NODES)
-        - fog_mask: MultiBinary(MAX_NODES)
-        - agent_position: Discrete(MAX_NODES)
-        - global_features: Box(N_GLOBAL_FEATURES,)
-
-    Action space: Discrete(N_ACTION_TYPES * MAX_NODES)
-        Decoded as: action_type = action // MAX_NODES, target = action % MAX_NODES
-    """
+    """Gymnasium environment for Red Team cyber attack simulation."""
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 10}
 
@@ -77,18 +63,7 @@ class CyberEnv(gym.Env):
         render_mode: str | None = None,
         blue_team: Any = None,
     ) -> None:
-        """Initialise CyberEnv.
-
-        Args:
-            network: Fixed network (original behaviour).
-            network_factory: Callable(seed) → Network. When provided, a new
-                network is generated on each reset() (PCG mode). Takes
-                precedence over ``network`` if both are supplied.
-            max_steps: Maximum steps per episode.
-            seed: Random seed.
-            render_mode: ``"human"`` or ``"rgb_array"``.
-            blue_team: Optional ScriptedBlueTeam. None = no defender.
-        """
+        """Initialise CyberEnv."""
         super().__init__()
 
         self.render_mode = render_mode

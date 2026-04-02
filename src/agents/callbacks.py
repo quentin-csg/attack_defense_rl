@@ -1,14 +1,3 @@
-"""Custom SB3 callbacks for Phase 3 Red Team training.
-
-Provides domain-specific TensorBoard metrics beyond what SB3 logs by default:
-- Exfiltration rate (primary objective success)
-- Detection rate (primary failure mode)
-- Nodes compromised, max suspicion, episode reward, episode length
-
-Also provides DashboardCallback that writes metrics to a JSONL file for the
-Streamlit training dashboard.
-"""
-
 from __future__ import annotations
 
 import collections
@@ -27,23 +16,7 @@ from stable_baselines3.common.callbacks import (
 
 
 class CyberMetricsCallback(BaseCallback):
-    """Log cyber-domain metrics to TensorBoard at the end of each episode.
-
-    Reads the terminal info dict from ``CyberEnv`` when an episode ends.
-    When using DummyVecEnv (SB3 standard), the terminal info is stored
-    under ``info["terminal_info"]`` because the env auto-resets. This
-    callback reads from ``terminal_info`` to get the correct values.
-
-    Maintains a rolling window (last 100 episodes) for each metric.
-
-    Metrics logged under the ``cyber/`` namespace:
-        - ``cyber/exfiltration_rate``  — fraction of episodes ending in exfil
-        - ``cyber/detection_rate``     — fraction of episodes ending in detection
-        - ``cyber/mean_nodes_compromised``
-        - ``cyber/mean_max_suspicion``
-        - ``cyber/mean_episode_length``
-        - ``cyber/mean_episode_reward``
-    """
+    """Log cyber-domain metrics to TensorBoard at the end of each episode."""
 
     def __init__(self, window: int = 100, verbose: int = 0) -> None:
         super().__init__(verbose)
@@ -97,22 +70,7 @@ class CyberMetricsCallback(BaseCallback):
 
 
 class DashboardCallback(BaseCallback):
-    """Write per-episode and per-update metrics to a JSONL file.
-
-    The Streamlit dashboard reads this file for live and replay modes.
-    Two event types are written:
-
-    - ``{"type": "episode", "timestep": N, ...cyber metrics...}``
-      Written at the end of each episode.
-    - ``{"type": "update", "timestep": N, ...train metrics...}``
-      Written after each PPO policy update (entropy, losses, KL, etc.).
-
-    Args:
-        log_path: Path to the JSONL output file. Opened in append mode so
-                  successive training runs accumulate in the same file.
-                  Use ``reset_on_start=True`` to truncate instead.
-        reset_on_start: If True, truncate the file at training start.
-    """
+    """Write per-episode and per-update metrics to a JSONL file."""
 
     def __init__(
         self,
@@ -220,26 +178,7 @@ def build_callback_list(
     dashboard_log_path: str = "logs/dashboard_metrics.jsonl",
     reset_dashboard: bool = False,
 ) -> CallbackList:
-    """Compose the standard Phase 3 callback stack.
-
-    Uses MaskableEvalCallback (sb3-contrib) instead of the standard
-    EvalCallback so that action masks are correctly applied during
-    evaluation rollouts.
-
-    Args:
-        eval_env: Separate evaluation environment (not used for training).
-        log_dir: TensorBoard log directory. None to disable eval logging.
-        save_dir: Directory where model checkpoints are saved. None to disable saving.
-        save_freq: Save a checkpoint every this many env steps.
-        eval_freq: Run evaluation every this many env steps.
-        eval_episodes: Number of episodes per evaluation run.
-        dashboard_log_path: Path for the JSONL dashboard metrics file.
-        reset_dashboard: If True, truncate the JSONL file at training start.
-
-    Returns:
-        CallbackList containing CyberMetricsCallback + DashboardCallback +
-        MaskableEvalCallback + CheckpointCallback.
-    """
+    """Compose the standard Phase 3 callback stack."""
     cyber_metrics = CyberMetricsCallback(verbose=0)
     dashboard = DashboardCallback(log_path=dashboard_log_path, reset_on_start=reset_dashboard)
 

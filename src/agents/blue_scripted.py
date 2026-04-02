@@ -1,5 +1,3 @@
-"""Scripted Blue Team agent — rule-based defender with adaptive patrol."""
-
 from __future__ import annotations
 
 import random
@@ -33,23 +31,7 @@ class BlueAction(NamedTuple):
 
 
 class ScriptedBlueTeam:
-    """Rule-based Blue Team agent.
-
-    Thresholds are randomised within a noise band on each ``reset()`` so
-    the Red agent cannot memorise exact trigger points.
-
-    Patrol targeting is weighted by recent suspicion activity. Nodes where
-    suspicion rose since the last step are flagged "hot" and patrolled more
-    often. Hot status decays after ``hot_duration`` steps, so the blue team
-    naturally follows the attacker as it moves through the network.
-
-    Args:
-        seed: Random seed for threshold noise and patrol selection.
-        patrol_interval: Mean steps between patrols (Poisson rate).
-        isolate_duration: Steps before an isolated node is auto-restored.
-        hot_duration: Steps a node stays hot after its last suspicion rise.
-            Callers should pass ``max(PATROL_HOT_DURATION, max_steps // 20)``.
-    """
+    """Rule-based Blue Team agent."""
 
     def __init__(
         self,

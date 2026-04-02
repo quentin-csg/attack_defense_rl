@@ -50,16 +50,7 @@ _NODE_LABELS = {
 
 
 def _network_from_topology(topo: dict) -> Network:
-    """Reconstruct a minimal Network object from serialised topology data.
-
-    Args:
-        topo: Dict with keys ``edges``, ``nodes``, ``entry_node_id``,
-              ``target_node_id`` as produced by ``CyberEnv._get_info()``.
-
-    Returns:
-        A Network instance with nodes and edges set up for rendering.
-        Services and vulnerabilities are left empty (not needed for display).
-    """
+    """Reconstruct a minimal Network object from serialised topology data."""
     net = Network()
     for str_nid, attrs in topo.get("nodes", {}).items():
         nid = int(str_nid)

@@ -15,11 +15,6 @@ import numpy as np
 import torch
 from sb3_contrib import MaskablePPO
 
-# Disable PyTorch distribution validation globally.
-# With 700 masked actions (14 × 50), the masked softmax can produce probabilities
-# that sum to 1.0 ± 1e-7 due to float32 precision, which fails PyTorch's Simplex
-# constraint check. This is a known sb3-contrib issue — disabling validate_args
-# removes the check without affecting training correctness.
 torch.distributions.Distribution.set_default_validate_args(False)
 
 from src.agents.callbacks import build_callback_list
@@ -45,12 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 def _make_eval_blue_team(blue_team: object, seed: int) -> object:
-    """Return an independent Blue Team instance for an eval environment.
-
-    Sharing a single ScriptedBlueTeam between train and eval envs causes
-    their internal RNGs to interleave on each reset(), making threshold
-    randomization non-reproducible across runs with the same seed.
-    """
+    """Return an independent Blue Team instance for an eval environment."""
     if blue_team is None:
         return None
     from src.agents.blue_scripted import ScriptedBlueTeam
@@ -68,16 +58,7 @@ def create_model(
     log_dir: str | None = None,
     seed: int = 42,
 ) -> MaskablePPO:
-    """Create a MaskablePPO model with Phase 3 hyperparameters.
-
-    Args:
-        env: ActionMasker-wrapped CyberEnv (or DummyVecEnv of masked envs).
-        log_dir: TensorBoard log directory. None to disable logging.
-        seed: Random seed for reproducibility.
-
-    Returns:
-        Configured MaskablePPO model (not yet trained).
-    """
+    """Create a MaskablePPO model with Phase 3 hyperparameters."""
     return MaskablePPO(
         "MultiInputPolicy",
         env,
@@ -109,26 +90,7 @@ def train(
     blue_team: object = None,
     pcg_size: str | None = None,
 ) -> MaskablePPO:
-    """Run the full Red Team training pipeline.
-
-    Creates environments, model, and callbacks, then calls model.learn().
-    On completion or KeyboardInterrupt, saves the model before returning.
-
-    Args:
-        total_timesteps: Total environment steps for training.
-        seed: Random seed (eval env uses seed + 1000).
-        log_dir: TensorBoard log directory. None to disable TensorBoard.
-        save_dir: Directory for model checkpoints and final model.
-                  None to disable checkpoint saving.
-        max_steps: Maximum steps per episode.
-        eval_freq: Evaluate every this many env steps.
-        eval_episodes: Number of episodes per evaluation.
-        save_freq: Save a checkpoint every this many env steps.
-
-    Returns:
-        Trained MaskablePPO model (env is closed; attach a new env for
-        further training).
-    """
+    """Run the full Red Team training pipeline."""
     if log_dir is not None:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
     if save_dir is not None:
@@ -205,30 +167,7 @@ def train_curriculum(
     eval_episodes: int = RL_EVAL_EPISODES,
     save_freq: int = RL_SAVE_FREQ,
 ) -> MaskablePPO:
-    """Train the Red agent through a curriculum of increasing network sizes.
-
-    For each world in the curriculum:
-    1. Generate a fixed network topology.
-    2. Wrap it in a PCG env where EVERY episode uses that topology.
-    3. Train for ``timesteps_per_world`` steps.
-    4. Advance to the next world (and stage when exhausted).
-
-    The same model weights are carried through all stages — the model is
-    never reset, only the environment changes.
-
-    Args:
-        curriculum: CurriculumManager instance (from src.pcg.curriculum).
-        seed: Random seed.
-        log_dir: TensorBoard log directory.
-        save_dir: Directory for checkpoints and final model.
-        blue_team: Optional ScriptedBlueTeam.
-        eval_freq: Evaluate every N steps.
-        eval_episodes: Episodes per evaluation.
-        save_freq: Checkpoint every N steps.
-
-    Returns:
-        Trained MaskablePPO model.
-    """
+    """Train the Red agent through a curriculum of increasing network sizes."""
     from src.agents.wrappers import make_pcg_masked_env
     from src.pcg.generator import generate_network
 
@@ -339,19 +278,7 @@ def train_curriculum(
 
 
 def load_model(path: str, env: Any = None) -> MaskablePPO:
-    """Load a saved MaskablePPO model.
-
-    Args:
-        path: Path to the saved model (.zip extension optional).
-        env: Environment to attach to the model. If None, the model
-             can still be used for inference but not for further training.
-
-    Raises:
-        FileNotFoundError: If the model file does not exist.
-
-    Returns:
-        Loaded MaskablePPO model.
-    """
+    """Load a saved MaskablePPO model."""
     zip_path = Path(path) if str(path).endswith(".zip") else Path(str(path) + ".zip")
     if not zip_path.exists():
         raise FileNotFoundError(f"Model file not found: {zip_path}")
@@ -364,19 +291,7 @@ def evaluate(
     n_episodes: int = 100,
     deterministic: bool = True,
 ) -> dict[str, float]:
-    """Evaluate a trained model over N episodes.
-
-    Args:
-        model: Trained MaskablePPO model.
-        env: ActionMasker-wrapped CyberEnv.
-        n_episodes: Number of episodes to run.
-        deterministic: If True, use the greedy policy; else sample.
-
-    Returns:
-        Dict with keys: exfiltration_rate, detection_rate,
-        mean_episode_reward, mean_episode_length, mean_nodes_compromised,
-        mean_max_suspicion.
-    """
+    """Evaluate a trained model over N episodes."""
     exfiltrated_list: list[float] = []
     detected_list: list[float] = []
     rewards: list[float] = []

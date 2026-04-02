@@ -1,5 +1,3 @@
-"""UI panel drawing functions for the Pygame dashboard."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

@@ -12,11 +12,7 @@ from src.dashboard.data_loader import downsample, rolling_mean
 
 
 def render_kpi_header(ep_df: pd.DataFrame) -> None:
-    """Render a top row of st.metric() KPI chips.
-
-    Args:
-        ep_df: Episode-type DataFrame from load_episode_metrics().
-    """
+    """Render a top row of st.metric() KPI chips."""
     col1, col2, col3, col4, col5 = st.columns(5)
 
     if ep_df.empty:
@@ -71,12 +67,7 @@ def render_kpi_header(ep_df: pd.DataFrame) -> None:
 
 
 def render_training_curves(upd_df: pd.DataFrame, window: int = 10) -> None:
-    """Render PPO training metric curves (reward, losses, entropy).
-
-    Args:
-        upd_df: Update-type DataFrame from load_update_metrics().
-        window: Rolling mean window size.
-    """
+    """Render PPO training metric curves (reward, losses, entropy)."""
     st.subheader("Training Curves")
 
     if upd_df.empty:
@@ -123,12 +114,7 @@ def render_training_curves(upd_df: pd.DataFrame, window: int = 10) -> None:
 
 
 def render_cyber_metrics(ep_df: pd.DataFrame, window: int = 50) -> None:
-    """Render cyber domain metrics (exfil, detection, nodes, suspicion, length).
-
-    Args:
-        ep_df: Episode-type DataFrame from load_episode_metrics().
-        window: Rolling mean window size.
-    """
+    """Render cyber domain metrics (exfil, detection, nodes, suspicion, length)."""
     st.subheader("Cyber Metrics")
 
     if ep_df.empty:
@@ -200,11 +186,7 @@ def render_cyber_metrics(ep_df: pd.DataFrame, window: int = 50) -> None:
 
 
 def render_eval_curves(eval_df: pd.DataFrame) -> None:
-    """Render evaluation checkpoint curves with reward ± std band.
-
-    Args:
-        eval_df: DataFrame from load_evaluations().
-    """
+    """Render evaluation checkpoint curves with reward ± std band."""
     st.subheader("Evaluation Checkpoints")
 
     if eval_df.empty:

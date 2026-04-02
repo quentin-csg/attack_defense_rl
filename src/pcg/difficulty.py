@@ -1,16 +1,3 @@
-"""Difficulty scoring and solvability checks for PCG networks (Phase 5).
-
-Functions:
-    compute_difficulty(network, entry, target) -> float
-        Score ≥ 0 — higher = harder for the Red agent.
-
-    compute_max_steps(network, entry, target) -> int
-        Episode budget scaled to network size and path length.
-
-    is_solvable(network) -> bool
-        Verifies a generated network has a valid, completable attack path.
-"""
-
 from __future__ import annotations
 
 import networkx as nx
@@ -29,24 +16,7 @@ def compute_difficulty(
     entry: int,
     target: int,
 ) -> float:
-    """Compute a difficulty score for the network.
-
-    Higher score = harder to complete.
-
-    Formula:
-        score = min_hops * 3.0
-              + n_nodes * 0.5
-              - path_vuln_density * 5.0   (more vulns = easier path)
-              - path_weak_creds * 3.0     (weak creds = easier)
-
-    Args:
-        network: The generated network.
-        entry: Entry node ID.
-        target: Target node ID.
-
-    Returns:
-        Difficulty score ≥ 0.0.
-    """
+    """Compute a difficulty score for the network."""
     if not nx.has_path(network.graph, entry, target):
         return 999.0  # unreachable — effectively infinite difficulty
 
@@ -80,19 +50,7 @@ def compute_max_steps(
     entry: int,
     target: int,
 ) -> int:
-    """Compute the recommended max_steps budget for an episode.
-
-    Based on PCG_BASE_STEPS + path length * PCG_STEPS_PER_HOP
-    + network size * PCG_STEPS_PER_NODE, clamped to [100, 400].
-
-    Args:
-        network: The generated network.
-        entry: Entry node ID.
-        target: Target node ID.
-
-    Returns:
-        Recommended max_steps value (integer in [100, 400]).
-    """
+    """Compute the recommended max_steps budget for an episode."""
     if not nx.has_path(network.graph, entry, target):
         return 400  # unreachable — give maximum budget
 
@@ -103,23 +61,7 @@ def compute_max_steps(
 
 
 def is_solvable(network: Network) -> bool:
-    """Verify a generated network has a valid, completable attack path.
-
-    A network is solvable if ALL of the following hold:
-
-    1. A path exists from entry_node_id to target_node_id.
-    2. The target node has has_loot = True (flag.txt present).
-
-    Note: The new win condition is LIST_FILES (ls) on the target, which only
-    requires a USER session — obtainable via CREDENTIAL_DUMP + LATERAL_MOVE
-    along any connected path.  No PRIVESC vuln is required on the target.
-
-    Args:
-        network: The network to validate.
-
-    Returns:
-        True if the network is solvable, False otherwise.
-    """
+    """Verify a generated network has a valid, completable attack path."""
     entry = network.entry_node_id
     target = network.target_node_id
 

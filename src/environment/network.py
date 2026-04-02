@@ -1,5 +1,3 @@
-"""Network wrapper around NetworkX — manages the graph topology and nodes."""
-
 from __future__ import annotations
 
 import networkx as nx
@@ -15,15 +13,7 @@ from src.environment.node import (
 
 
 class Network:
-    """Wrapper around a NetworkX graph that holds Node objects.
-
-    Attributes:
-        graph: The underlying NetworkX graph.
-        nodes: Mapping of node_id -> Node.
-        entry_node_id: The node where the Red Team starts (DMZ entry point).
-        target_node_id: The node containing the exfiltration target (data center).
-        isolated_edges: Edges temporarily removed by ISOLATE_NODE.
-    """
+    """Wrapper around a NetworkX graph that holds Node objects. """
 
     def __init__(self) -> None:
         self.graph: nx.Graph = nx.Graph()
@@ -59,13 +49,7 @@ class Network:
         return self.graph.has_edge(node_a, node_b)
 
     def isolate_node(self, node_id: int) -> None:
-        """Temporarily remove all edges of a node (Blue Team ISOLATE).
-
-        Stores removed edges so they can be restored later.
-        Calling this on an already-isolated node is a no-op — without the
-        guard, the second call would overwrite the stored edges with an empty
-        list, making the isolation permanent even after restore_node().
-        """
+        """Temporarily remove all edges of a node (Blue Team ISOLATE)."""
         if node_id in self.isolated_edges:
             return  # already isolated — do not overwrite stored edges
         edges = list(self.graph.edges(node_id))

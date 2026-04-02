@@ -1,22 +1,3 @@
-"""Curriculum learning manager for Phase 5.
-
-Manages progressive training across three difficulty stages:
-    Stage 1 (Small)  → 5 worlds × 100k timesteps
-    Stage 2 (Medium) → 5 worlds × 150k timesteps
-    Stage 3 (Large)  → 5 worlds × 200k timesteps
-
-Each "world" is a fixed generated topology that the agent trains on for
-a set number of timesteps before a new topology is generated (forcing
-the agent to generalise rather than memorise).
-
-Usage:
-    curriculum = CurriculumManager(seed=42)
-    while not curriculum.is_complete:
-        net, meta = curriculum.generate_current_network()
-        # ... train on net for meta.recommended_max_steps ...
-        curriculum.advance_world()
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -42,12 +23,7 @@ class CurriculumStage:
 
 @dataclass
 class CurriculumManager:
-    """Manages progression through curriculum stages.
-
-    Args:
-        stages: Ordered list of curriculum stages (default: small→medium→large).
-        seed: Base random seed; world i at stage j uses seed + offset.
-    """
+    """Manages progression through curriculum stages."""
 
     stages: list[CurriculumStage] = field(default_factory=list)
     seed: int = 42
@@ -104,11 +80,7 @@ class CurriculumManager:
     # ------------------------------------------------------------------
 
     def generate_current_network(self) -> tuple[Network, NetworkMeta]:
-        """Generate the network for the current curriculum position.
-
-        Returns a new network each call (useful for testing), but the
-        training loop should call this once per world, not per episode.
-        """
+        """Generate the network for the current curriculum position."""
         world_seed = self.seed + self._world_seed_offset
         return generate_network(self.current_stage.size, seed=world_seed)
 
@@ -117,14 +89,7 @@ class CurriculumManager:
     # ------------------------------------------------------------------
 
     def advance_world(self) -> bool:
-        """Move to the next world within the current stage.
-
-        If the current stage is exhausted, automatically advances to the
-        next stage.
-
-        Returns:
-            True if the stage changed (moved to a harder stage), False otherwise.
-        """
+        """Move to the next world within the current stage."""
         if self.is_complete:
             return False
 
@@ -136,11 +101,7 @@ class CurriculumManager:
         return False
 
     def advance_stage(self) -> bool:
-        """Move to the next curriculum stage.
-
-        Returns:
-            True if the stage changed, False if already on the last stage.
-        """
+        """Move to the next curriculum stage."""
         if self.current_stage_idx < len(self.stages) - 1:
             self.current_stage_idx += 1
             self.current_world_idx = 0

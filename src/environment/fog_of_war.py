@@ -9,16 +9,7 @@ from src.environment.node import DiscoveryLevel, Node, OsType, SessionLevel
 
 
 class FogOfWar:
-    """Manages what the Red Team can and cannot see.
-
-    The fog has two layers:
-    - discovered: the node exists (IP known via SCAN)
-    - enumerated: services & vulns are known (via ENUMERATE)
-
-    Non-discovered nodes appear as padding (-1).
-    Discovered-but-not-enumerated nodes have partial info (position, online, but
-    no vuln/service details).
-    """
+    """Manages what the Red Team can and cannot see."""
 
     def get_fog_mask(self, nodes: dict[int, Node]) -> np.ndarray:
         """Return a binary mask of shape (MAX_NODES,).
@@ -47,12 +38,7 @@ class FogOfWar:
         max_services: int = 5,
         max_vulns: int = 5,
     ) -> np.ndarray:
-        """Encode a single node into a feature vector.
-
-        Returns an array of shape (N_NODE_FEATURES,) with float32 values.
-        If the node is not discovered, returns all PADDING_VALUE.
-        If discovered but not enumerated, vuln/service info is hidden (0).
-        """
+        """Encode a single node into a feature vector."""
         features = np.full(N_NODE_FEATURES, PADDING_VALUE, dtype=np.float32)
 
         if node.discovery_level == DiscoveryLevel.UNKNOWN:
@@ -92,13 +78,7 @@ class FogOfWar:
         num_real_nodes: int,
         agent_position: int = 0,
     ) -> dict[str, np.ndarray]:
-        """Build the full observation dict for the agent.
-
-        Args:
-            agent_position: Current Red Team position (tracked by CyberEnv).
-
-        Returns a dict matching CyberEnv's observation_space.
-        """
+        """Build the full observation dict for the agent."""
         node_features = np.full((MAX_NODES, N_NODE_FEATURES), PADDING_VALUE, dtype=np.float32)
 
         for node_id, node in nodes.items():

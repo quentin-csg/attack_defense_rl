@@ -1,8 +1,3 @@
-"""Visual constants for the Pygame dashboard.
-
-Pure data module — no Pygame imports. Colors are plain RGB(A) tuples.
-"""
-
 WINDOW_WIDTH: int = 1280
 WINDOW_HEIGHT: int = 720
 WINDOW_TITLE: str = "Attack & Defense RL"

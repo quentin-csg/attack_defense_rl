@@ -1,9 +1,3 @@
-"""Graph drawing functions for the Pygame visualization.
-
-Each function draws one layer onto a pygame.Surface (back-to-front order).
-This module is stateless — it receives all data it needs as parameters.
-"""
-
 from __future__ import annotations
 
 import math

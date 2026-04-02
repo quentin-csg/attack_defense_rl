@@ -1,5 +1,3 @@
-"""Node dataclass — represents a single machine on the network."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,7 +6,6 @@ from enum import Enum, IntEnum, auto
 
 class OsType(Enum):
     """Operating system types for network nodes."""
-
     LINUX = auto()
     WINDOWS = auto()
     NETWORK_DEVICE = auto()
@@ -16,7 +13,6 @@ class OsType(Enum):
 
 class SessionLevel(IntEnum):
     """Red Team session level on a node (ordered, comparable)."""
-
     NONE = 0
     USER = 1
     ROOT = 2
@@ -24,7 +20,6 @@ class SessionLevel(IntEnum):
 
 class DiscoveryLevel(IntEnum):
     """How much the Red Team knows about a node (ordered, comparable)."""
-
     UNKNOWN = 0
     DISCOVERED = 1  # IP known via SCAN
     ENUMERATED = 2  # services & vulns known via ENUMERATE
@@ -41,27 +36,7 @@ class Service:
 
 @dataclass
 class Node:
-    """A single machine in the network.
-
-    Attributes:
-        node_id: Unique integer identifier (matches NetworkX node key).
-        os_type: Operating system type.
-        services: Services running on this node.
-        vulnerabilities: List of vulnerability names active on this node.
-        is_online: Whether the node is reachable.
-        suspicion_level: Blue Team's suspicion for this node (0-100).
-        max_suspicion_historical: Peak suspicion ever reached (for WAIT floor).
-        session_level: Red Team's current access level.
-        discovery_level: How much Red knows about this node.
-        has_backdoor: Whether Red installed a persistent backdoor.
-        has_tunnel: Whether Red established an encrypted tunnel.
-        has_loot: Whether this node contains exfiltrable data.
-        has_weak_credentials: Whether brute-force can succeed.
-        is_under_surveillance: Whether Blue Team is watching closely.
-        clean_logs_count: Number of consecutive CLEAN_LOGS used (for diminishing returns).
-        last_clean_logs_step: Step number of last CLEAN_LOGS (for cooldown).
-        detectable_traces: Set of action names that left traces (for patrols).
-    """
+    """A single machine in the network."""
 
     node_id: int
     os_type: OsType = OsType.LINUX
@@ -91,15 +66,7 @@ class Node:
             self.max_suspicion_historical = self.suspicion_level
 
     def reduce_suspicion(self, amount: float, bypass_floor: bool = False) -> None:
-        """Reduce suspicion by `amount` (positive value).
-
-        Args:
-            amount: Positive value to subtract from suspicion.
-            bypass_floor: If True, ignore the WAIT floor (used by CLEAN_LOGS which
-                          requires ROOT access and has diminishing returns — it should
-                          be able to reduce suspicion below the historical peak / 2).
-                          WAIT always uses bypass_floor=False.
-        """
+        """Reduce suspicion by `amount` (positive value)."""
         from src.config import SUSPICION_MIN, WAIT_FLOOR_DIVISOR
 
         if bypass_floor:
@@ -112,12 +79,7 @@ class Node:
             )
 
     def reset_session(self) -> None:
-        """Reset Red Team session (used by ROTATE_CREDENTIALS).
-
-        A backdoor protects the session from rotation. A tunnel is also torn
-        down unless a backdoor shields it — without an active session, the
-        tunnel has no carrier and would grant suspicion discounts unfairly.
-        """
+        """Reset Red Team session (used by ROTATE_CREDENTIALS)."""
         if not self.has_backdoor:
             self.session_level = SessionLevel.NONE
             self.has_tunnel = False
