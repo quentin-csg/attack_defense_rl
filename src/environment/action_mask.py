@@ -1,6 +1,5 @@
 """Action masking — compute which actions are valid at each step.
 
-CORRECTION 1: Flat Discrete space, MaskablePPO requires a boolean mask.
 WAIT is ALWAYS valid so the mask is never all-zero.
 """
 
@@ -29,22 +28,18 @@ def compute_action_mask(
 
     Returns:
         np.ndarray of shape (N_ACTION_TYPES * MAX_NODES,) with dtype bool.
-        True = action is valid, False = invalid.
     """
     mask = np.zeros(N_ACTION_TYPES * MAX_NODES, dtype=bool)
 
     for node_id, node in network.nodes.items():
-        # --- SCAN: need session on the target (scan from a compromised node) ---
         if node.session_level != SessionLevel.NONE and node.is_online:
             mask[ActionType.SCAN * MAX_NODES + node_id] = True
 
-        # --- ENUMERATE / ENUMERATE_AGGRESSIVE: node must be DISCOVERED (not yet ENUMERATED) ---
-        # Re-enumerating an already-ENUMERATED node wastes a step and adds suspicion for nothing.
+        # Re-enumerating ENUMERATED wastes a step; only allow on DISCOVERED.
         if node.discovery_level == DiscoveryLevel.DISCOVERED and node.is_online:
             mask[ActionType.ENUMERATE * MAX_NODES + node_id] = True
             mask[ActionType.ENUMERATE_AGGRESSIVE * MAX_NODES + node_id] = True
 
-        # --- EXPLOIT: node must be enumerated + have exploitable vuln + no session yet ---
         if (
             node.discovery_level == DiscoveryLevel.ENUMERATED
             and node.is_online
@@ -58,10 +53,8 @@ def compute_action_mask(
             if has_exploit_vuln:
                 mask[ActionType.EXPLOIT * MAX_NODES + node_id] = True
 
-        # --- BRUTE_FORCE: node must be ENUMERATED + have weak creds + no session ---
         # Requires ENUMERATED (not just DISCOVERED) to avoid leaking has_weak_credentials
-        # through the fog of war: MaskablePPO sees the mask, so a DISCOVERED-only check
-        # would let the agent infer weak creds without having scanned the node.
+        # through the mask — MaskablePPO observes it, so a weaker check leaks fog info.
         if (
             node.discovery_level == DiscoveryLevel.ENUMERATED
             and node.is_online
@@ -70,7 +63,6 @@ def compute_action_mask(
         ):
             mask[ActionType.BRUTE_FORCE * MAX_NODES + node_id] = True
 
-        # --- PRIVESC: need USER session + ENUMERATED (to know the vuln) + privesc vuln ---
         if (
             node.session_level == SessionLevel.USER
             and node.is_online
@@ -82,9 +74,6 @@ def compute_action_mask(
             if has_privesc:
                 mask[ActionType.PRIVESC * MAX_NODES + node_id] = True
 
-        # --- CREDENTIAL_DUMP: need at least USER session, creds not yet dumped ---
-        # Once has_dumped_creds is True there is no benefit to dumping again —
-        # masking prevents the agent from wasting steps and accumulating suspicion.
         if (
             not has_dumped_creds
             and node.session_level != SessionLevel.NONE
@@ -92,14 +81,11 @@ def compute_action_mask(
         ):
             mask[ActionType.CREDENTIAL_DUMP * MAX_NODES + node_id] = True
 
-        # --- PIVOT: target must be DISCOVERED (not UNKNOWN to avoid FoW leak)
-        #     and reachable from a compromised node via 2 hops ---
         if (
             node.discovery_level >= DiscoveryLevel.DISCOVERED
             and node.is_online
             and node.session_level == SessionLevel.NONE
         ):
-            # Check if any compromised (and online) node can reach this one (2 hops)
             for comp_id, comp_node in network.nodes.items():
                 if comp_node.session_level != SessionLevel.NONE and comp_node.is_online:
                     for neighbor_id in network.get_neighbors(comp_id):
@@ -109,14 +95,12 @@ def compute_action_mask(
                 if mask[ActionType.PIVOT * MAX_NODES + node_id]:
                     break
 
-        # --- LATERAL_MOVE: need dumped creds + target adjacent to compromised node ---
         if (
             has_dumped_creds
             and node.session_level == SessionLevel.NONE
             and node.is_online
             and node.discovery_level >= DiscoveryLevel.DISCOVERED
         ):
-            # Check if adjacent to any compromised (and online) node
             for comp_id, comp_node in network.nodes.items():
                 if (
                     comp_node.session_level != SessionLevel.NONE
@@ -126,19 +110,15 @@ def compute_action_mask(
                     mask[ActionType.LATERAL_MOVE * MAX_NODES + node_id] = True
                     break
 
-        # --- INSTALL_BACKDOOR: need at least USER, no backdoor yet ---
         if node.session_level != SessionLevel.NONE and not node.has_backdoor and node.is_online:
             mask[ActionType.INSTALL_BACKDOOR * MAX_NODES + node_id] = True
 
-        # --- EXFILTRATE: need ROOT + node has loot ---
         if node.session_level == SessionLevel.ROOT and node.has_loot and node.is_online:
             mask[ActionType.EXFILTRATE * MAX_NODES + node_id] = True
 
-        # --- TUNNEL: need at least USER, no tunnel yet ---
         if node.session_level != SessionLevel.NONE and not node.has_tunnel and node.is_online:
             mask[ActionType.TUNNEL * MAX_NODES + node_id] = True
 
-        # --- CLEAN_LOGS: need ROOT + cooldown respected ---
         if (
             node.session_level == SessionLevel.ROOT
             and node.is_online
@@ -146,8 +126,6 @@ def compute_action_mask(
         ):
             mask[ActionType.CLEAN_LOGS * MAX_NODES + node_id] = True
 
-    # --- LIST_FILES (ls): capture flag.txt on the target node ---
-    # Valid only when the agent is physically ON the target node with an active session.
     target_node_id = network.target_node_id
     if target_node_id is not None and target_node_id < MAX_NODES:
         target_node = network.nodes.get(target_node_id)
@@ -160,10 +138,8 @@ def compute_action_mask(
         ):
             mask[ActionType.LIST_FILES * MAX_NODES + target_node_id] = True
 
-    # --- WAIT: always valid on the agent's current position ---
-    # Using agent_position (not just entry_node_id) ensures the mask is never all-zero
-    # even after Blue Team ROTATE_CREDENTIALS strips all sessions from the entry node.
-    # Guard: agent_position must be a valid node index (defensive against invalid state).
+    # WAIT is always valid — using agent_position ensures the mask is never all-zero
+    # even after ROTATE_CREDENTIALS strips all sessions from the entry node.
     wait_target = agent_position if agent_position < MAX_NODES else 0
     mask[ActionType.WAIT * MAX_NODES + wait_target] = True
 

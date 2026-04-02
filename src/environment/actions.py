@@ -60,24 +60,15 @@ class ActionType(IntEnum):
     TUNNEL = 11
     CLEAN_LOGS = 12
     WAIT = 13
-    LIST_FILES = 14  # run 'ls' on the target flag node — replaces EXFILTRATE as the win condition
+    LIST_FILES = 14  # win condition for PCG networks — replaces EXFILTRATE
 
 
-# Single source of truth — adding a new ActionType member updates everything automatically
 N_ACTION_TYPES: int = len(ActionType)
 
 
 @dataclass
 class ActionResult:
-    """Result of executing an action.
-
-    Attributes:
-        success: Whether the action succeeded.
-        reward: Immediate reward from this action.
-        suspicion_delta: Change in suspicion on the target node.
-        info: Additional info for logging/debugging.
-        terminated: Whether the episode ends (e.g. full detection).
-    """
+    """Result of executing an action."""
 
     success: bool = False
     reward: float = 0.0
@@ -90,14 +81,8 @@ class ActionResult:
 
 
 def decode_action(action: int) -> tuple[ActionType, int]:
-    """Decode a flat discrete action into (action_type, target_node).
-
-    Follows CORRECTION 1: action_type = action // MAX_NODES,
-    target_node = action % MAX_NODES.
-    """
-    action_type = ActionType(action // MAX_NODES)
-    target_node = action % MAX_NODES
-    return action_type, target_node
+    """Decode a flat discrete action into (action_type, target_node)."""
+    return ActionType(action // MAX_NODES), action % MAX_NODES
 
 
 def encode_action(action_type: ActionType, target_node: int) -> int:
@@ -114,21 +99,7 @@ def execute_action(
     agent_position: int,
     has_dumped_creds: bool = False,
 ) -> ActionResult:
-    """Execute a Red Team action and return the result.
-
-    Args:
-        action_type: The type of action to perform.
-        target_node_id: The target node ID.
-        network: The current network state.
-        current_step: Current episode step (for cooldown checks).
-        rng: Random number generator (for deterministic tests).
-        agent_position: Node ID where the agent currently is.
-        has_dumped_creds: Whether creds have been dumped (for LATERAL_MOVE).
-
-    Returns:
-        ActionResult with success, reward, suspicion change, and info.
-    """
-    # LATERAL_MOVE needs has_dumped_creds; capture it via lambda for uniform dispatch
+    """Execute a Red Team action and return the result."""
     handlers: dict[ActionType, Any] = {
         ActionType.SCAN: _execute_scan,
         ActionType.ENUMERATE: _execute_enumerate,
@@ -151,27 +122,18 @@ def execute_action(
         ActionType.WAIT: _execute_wait,
     }
 
-    # Coverage guard: every ActionType must have a handler entry
     assert set(handlers) == set(ActionType), (  # noqa: S101
         f"Missing handlers for: {set(ActionType) - set(handlers)}"
     )
 
-    handler = handlers[action_type]
-    return handler(target_node_id, network, current_step, rng, agent_position)
+    return handlers[action_type](target_node_id, network, current_step, rng, agent_position)
 
 
 def _apply_suspicion(node: Node, base_amount: float, network: Network) -> float:
-    """Apply suspicion to a node, halved if a tunnel exists on the path."""
-    amount = base_amount
-    if node.has_tunnel:
-        amount /= TUNNEL_SUSPICION_DIVISOR
+    """Apply suspicion to a node, halved if a tunnel exists."""
+    amount = base_amount / TUNNEL_SUSPICION_DIVISOR if node.has_tunnel else base_amount
     node.add_suspicion(amount)
     return amount
-
-
-# ---------------------------------------------------------------------------
-# Individual action handlers
-# ---------------------------------------------------------------------------
 
 
 def _execute_scan(
@@ -186,9 +148,8 @@ def _execute_scan(
     susp = _apply_suspicion(node, SUSPICION_SCAN, network)
 
     discovered = []
-    neighbors = network.get_neighbors(target_id)
     reward = 0.0
-    for nid in neighbors:
+    for nid in network.get_neighbors(target_id):
         neighbor = network.get_node(nid)
         if neighbor.discovery_level == DiscoveryLevel.UNKNOWN:
             neighbor.discovery_level = DiscoveryLevel.DISCOVERED
@@ -210,13 +171,11 @@ def _execute_enumerate(
     rng: random.Random,
     agent_pos: int,
 ) -> ActionResult:
-    """ENUMERATE: reveal services and vulns of a discovered node (slow, discrete)."""
+    """ENUMERATE: reveal services and vulns of a discovered node."""
     node = network.get_node(target_id)
     susp = _apply_suspicion(node, SUSPICION_ENUMERATE, network)
-
     was_already = node.discovery_level == DiscoveryLevel.ENUMERATED
     node.discovery_level = DiscoveryLevel.ENUMERATED
-
     return ActionResult(
         success=not was_already,
         reward=0.0,
@@ -235,10 +194,8 @@ def _execute_enumerate_aggressive(
     """ENUMERATE_AGGRESSIVE: fast but noisy enumeration."""
     node = network.get_node(target_id)
     susp = _apply_suspicion(node, SUSPICION_ENUMERATE_AGGRESSIVE, network)
-
     was_already = node.discovery_level == DiscoveryLevel.ENUMERATED
     node.discovery_level = DiscoveryLevel.ENUMERATED
-
     return ActionResult(
         success=not was_already,
         reward=0.0,
@@ -257,7 +214,6 @@ def _execute_exploit(
     """EXPLOIT: attempt to gain USER session via a vulnerability."""
     node = network.get_node(target_id)
 
-    # Pick exploit suspicion based on vuln (use first available RCE/SQLI/URL vuln)
     exploit_vulns = [
         v
         for v in node.vulnerabilities
@@ -267,53 +223,35 @@ def _execute_exploit(
     if not exploit_vulns:
         susp = _apply_suspicion(node, SUSPICION_EXPLOIT_MIN, network)
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
+            success=False, reward=0.0, suspicion_delta=susp,
             info={"action": "EXPLOIT", "target": target_id, "reason": "no_exploitable_vuln"},
         )
 
     vuln = get_vuln(exploit_vulns[0])
-    susp_cost = vuln.suspicion_cost
-    susp = _apply_suspicion(node, susp_cost, network)
+    susp = _apply_suspicion(node, vuln.suspicion_cost, network)
 
     roll = rng.random()
-    # Clamp fail_prob so success + crash + fail = 1 even if success_rate > 0.95
     fail_prob = max(0.0, 1.0 - vuln.success_rate - EXPLOIT_CRASH_RATE)
     if roll < EXPLOIT_CRASH_RATE:
-        # Crash — leaves a detectable trace (service error in logs); is_online stays True
-        # (the service may restart; the trace is what matters for Blue Team patrols)
         node.detectable_traces.add("EXPLOIT_CRASH")
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
+            success=False, reward=0.0, suspicion_delta=susp,
             info={"action": "EXPLOIT", "target": target_id, "outcome": "crash"},
         )
     elif roll < EXPLOIT_CRASH_RATE + fail_prob:
-        # Fail silently
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
+            success=False, reward=0.0, suspicion_delta=susp,
             info={"action": "EXPLOIT", "target": target_id, "outcome": "fail"},
         )
     else:
-        # Success
         was_none = node.session_level == SessionLevel.NONE
         if node.session_level == SessionLevel.NONE:
             node.session_level = SessionLevel.USER
-        reward = REWARD_NEW_NODE_COMPROMISED if was_none else 0.0
         return ActionResult(
             success=True,
-            reward=reward,
+            reward=REWARD_NEW_NODE_COMPROMISED if was_none else 0.0,
             suspicion_delta=susp,
-            info={
-                "action": "EXPLOIT",
-                "target": target_id,
-                "outcome": "success",
-                "vuln": vuln.name,
-            },
+            info={"action": "EXPLOIT", "target": target_id, "outcome": "success", "vuln": vuln.name},
         )
 
 
@@ -330,9 +268,7 @@ def _execute_brute_force(
 
     if not node.has_weak_credentials:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
+            success=False, reward=0.0, suspicion_delta=susp,
             info={"action": "BRUTE_FORCE", "target": target_id, "reason": "no_weak_creds"},
         )
 
@@ -340,20 +276,16 @@ def _execute_brute_force(
         was_none = node.session_level == SessionLevel.NONE
         if node.session_level == SessionLevel.NONE:
             node.session_level = SessionLevel.USER
-        reward = REWARD_NEW_NODE_COMPROMISED if was_none else 0.0
         return ActionResult(
             success=True,
-            reward=reward,
+            reward=REWARD_NEW_NODE_COMPROMISED if was_none else 0.0,
             suspicion_delta=susp,
             info={"action": "BRUTE_FORCE", "target": target_id, "outcome": "success"},
         )
-    else:
-        return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
-            info={"action": "BRUTE_FORCE", "target": target_id, "outcome": "fail"},
-        )
+    return ActionResult(
+        success=False, reward=0.0, suspicion_delta=susp,
+        info={"action": "BRUTE_FORCE", "target": target_id, "outcome": "fail"},
+    )
 
 
 def _execute_privesc(
@@ -367,14 +299,10 @@ def _execute_privesc(
     node = network.get_node(target_id)
     susp = _apply_suspicion(node, SUSPICION_PRIVESC, network)
 
-    privesc_vulns = [
-        v for v in node.vulnerabilities if get_vuln(v).category == VulnCategory.PRIVESC
-    ]
+    privesc_vulns = [v for v in node.vulnerabilities if get_vuln(v).category == VulnCategory.PRIVESC]
     if not privesc_vulns:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
+            success=False, reward=0.0, suspicion_delta=susp,
             info={"action": "PRIVESC", "target": target_id, "reason": "no_privesc_vuln"},
         )
 
@@ -382,18 +310,13 @@ def _execute_privesc(
     if rng.random() < vuln.success_rate:
         node.session_level = SessionLevel.ROOT
         return ActionResult(
-            success=True,
-            reward=REWARD_ROOT_OBTAINED,
-            suspicion_delta=susp,
+            success=True, reward=REWARD_ROOT_OBTAINED, suspicion_delta=susp,
             info={"action": "PRIVESC", "target": target_id, "outcome": "success"},
         )
-    else:
-        return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=susp,
-            info={"action": "PRIVESC", "target": target_id, "outcome": "fail"},
-        )
+    return ActionResult(
+        success=False, reward=0.0, suspicion_delta=susp,
+        info={"action": "PRIVESC", "target": target_id, "outcome": "fail"},
+    )
 
 
 def _execute_credential_dump(
@@ -405,29 +328,21 @@ def _execute_credential_dump(
     has_dumped_creds: bool = False,
 ) -> ActionResult:
     """CREDENTIAL_DUMP: extract reusable credentials from a compromised node."""
-    # Defence-in-depth: mask should block this, but guard here too
     if has_dumped_creds:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "CREDENTIAL_DUMP", "target": target_id, "reason": "already_dumped"},
         )
     node = network.get_node(target_id)
     if node.session_level == SessionLevel.NONE:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "CREDENTIAL_DUMP", "target": target_id, "reason": "no_session"},
         )
     susp = _apply_suspicion(node, SUSPICION_CREDENTIAL_DUMP, network)
     node.detectable_traces.add("CREDENTIAL_DUMP")
-
     return ActionResult(
-        success=True,
-        reward=0.0,
-        suspicion_delta=susp,
+        success=True, reward=0.0, suspicion_delta=susp,
         info={"action": "CREDENTIAL_DUMP", "target": target_id},
     )
 
@@ -439,29 +354,19 @@ def _execute_pivot(
     rng: random.Random,
     agent_pos: int,
 ) -> ActionResult:
-    """PIVOT: access a discovered non-adjacent node via a compromised intermediary.
-
-    Grants a USER session on the target node and elevates discovery to ENUMERATED.
-    Requires the target to be reachable within 2 hops from any compromised node.
-    """
+    """PIVOT: access a node via a compromised intermediary (2-hop max)."""
     node = network.get_node(target_id)
 
-    # Guard: node must have no session (mask should enforce this, but defence-in-depth)
     if node.session_level != SessionLevel.NONE:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "PIVOT", "target": target_id, "reason": "already_compromised"},
         )
 
-    # Defence-in-depth: verify reachability from a compromised online node (2-hop max).
-    # The action mask normally enforces this, but a direct handler call must also be safe.
     reachable = False
     for comp_id, comp_node in network.nodes.items():
         if comp_node.session_level != SessionLevel.NONE and comp_node.is_online:
-            neighbors = network.get_neighbors(comp_id)
-            for neighbor_id in neighbors:
+            for neighbor_id in network.get_neighbors(comp_id):
                 if neighbor_id == target_id or target_id in network.get_neighbors(neighbor_id):
                     reachable = True
                     break
@@ -470,24 +375,15 @@ def _execute_pivot(
 
     if not reachable:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "PIVOT", "target": target_id, "reason": "not_reachable"},
         )
 
     susp = _apply_suspicion(node, SUSPICION_PIVOT, network)
-
-    # Only award NEW_NODE_COMPROMISED reward if node was uncompromised
-    was_none = node.session_level == SessionLevel.NONE  # always True here after the guard
     node.session_level = SessionLevel.USER
     node.discovery_level = DiscoveryLevel.ENUMERATED
-
-    reward = REWARD_NEW_NODE_COMPROMISED if was_none else 0.0
     return ActionResult(
-        success=True,
-        reward=reward,
-        suspicion_delta=susp,
+        success=True, reward=REWARD_NEW_NODE_COMPROMISED, suspicion_delta=susp,
         info={"action": "PIVOT", "target": target_id},
     )
 
@@ -504,12 +400,9 @@ def _execute_lateral_move(
     node = network.get_node(target_id)
     if not has_dumped_creds:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "LATERAL_MOVE", "target": target_id, "reason": "no_creds"},
         )
-    # Defence-in-depth: target must be adjacent to a compromised online node
     adjacent_to_compromised = any(
         comp_node.session_level != SessionLevel.NONE
         and comp_node.is_online
@@ -518,21 +411,16 @@ def _execute_lateral_move(
     )
     if not adjacent_to_compromised:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "LATERAL_MOVE", "target": target_id, "reason": "not_adjacent"},
         )
     susp = _apply_suspicion(node, SUSPICION_LATERAL_MOVE, network)
-
     was_none = node.session_level == SessionLevel.NONE
     if node.session_level == SessionLevel.NONE:
         node.session_level = SessionLevel.USER
-    reward = REWARD_NEW_NODE_COMPROMISED if was_none else 0.0
-
     return ActionResult(
         success=True,
-        reward=reward,
+        reward=REWARD_NEW_NODE_COMPROMISED if was_none else 0.0,
         suspicion_delta=susp,
         info={"action": "LATERAL_MOVE", "target": target_id},
     )
@@ -549,19 +437,14 @@ def _execute_install_backdoor(
     node = network.get_node(target_id)
     if node.session_level == SessionLevel.NONE:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "INSTALL_BACKDOOR", "target": target_id, "reason": "no_session"},
         )
     susp = _apply_suspicion(node, SUSPICION_INSTALL_BACKDOOR, network)
     node.has_backdoor = True
     node.detectable_traces.add("INSTALL_BACKDOOR")
-
     return ActionResult(
-        success=True,
-        reward=0.0,
-        suspicion_delta=susp,
+        success=True, reward=0.0, suspicion_delta=susp,
         info={"action": "INSTALL_BACKDOOR", "target": target_id},
     )
 
@@ -573,23 +456,18 @@ def _execute_exfiltrate(
     rng: random.Random,
     agent_pos: int,
 ) -> ActionResult:
-    """EXFILTRATE: extract data from a node (main objective). Requires ROOT."""
+    """EXFILTRATE: extract data from a node (legacy win condition). Requires ROOT."""
     node = network.get_node(target_id)
     if node.session_level != SessionLevel.ROOT:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "EXFILTRATE", "target": target_id, "reason": "no_root"},
         )
     susp = _apply_suspicion(node, SUSPICION_EXFILTRATE, network)
     node.detectable_traces.add("EXFILTRATE")
-
-    reward = REWARD_EXFILTRATE if node.has_loot else 0.0
-
     return ActionResult(
         success=node.has_loot,
-        reward=reward,
+        reward=REWARD_EXFILTRATE if node.has_loot else 0.0,
         suspicion_delta=susp,
         info={"action": "EXFILTRATE", "target": target_id, "had_loot": node.has_loot},
     )
@@ -602,44 +480,27 @@ def _execute_list_files(
     rng: random.Random,
     agent_pos: int,
 ) -> ActionResult:
-    """LIST_FILES (ls): list files on the target flag node to capture the flag.
-
-    Win condition for PCG networks.  Does NOT require ROOT — reaching the node
-    via LATERAL_MOVE (USER session) is enough.  The node must have no
-    exploitable vulns (generator ensures this), so this is the only path to
-    victory.
-    """
+    """LIST_FILES (ls): capture the flag on the target node (PCG win condition)."""
     node = network.get_node(target_id)
-    # Defence-in-depth: must be executed ON the actual target node
     if target_id != network.target_node_id:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "ls", "target": target_id, "reason": "not_target_node"},
         )
     if node.session_level == SessionLevel.NONE:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "ls", "target": target_id, "reason": "no_session"},
         )
     if not node.has_loot:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "ls", "target": target_id, "reason": "no_flag"},
         )
-
     susp = _apply_suspicion(node, SUSPICION_LIST_FILES, network)
     node.detectable_traces.add("ls")
-
     return ActionResult(
-        success=True,
-        reward=REWARD_EXFILTRATE,
-        suspicion_delta=susp,
+        success=True, reward=REWARD_EXFILTRATE, suspicion_delta=susp,
         info={"action": "ls (flag captured)", "target": target_id},
     )
 
@@ -655,18 +516,13 @@ def _execute_tunnel(
     node = network.get_node(target_id)
     if node.session_level == SessionLevel.NONE:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "TUNNEL", "target": target_id, "reason": "no_session"},
         )
     susp = _apply_suspicion(node, SUSPICION_TUNNEL, network)
     node.has_tunnel = True
-
     return ActionResult(
-        success=True,
-        reward=0.0,
-        suspicion_delta=susp,
+        success=True, reward=0.0, suspicion_delta=susp,
         info={"action": "TUNNEL", "target": target_id},
     )
 
@@ -678,38 +534,26 @@ def _execute_clean_logs(
     rng: random.Random,
     agent_pos: int,
 ) -> ActionResult:
-    """CLEAN_LOGS: erase traces on a node. Requires ROOT. Diminishing returns + cooldown."""
+    """CLEAN_LOGS: erase traces. Requires ROOT. Diminishing returns + cooldown."""
     node = network.get_node(target_id)
     if node.session_level != SessionLevel.ROOT:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "CLEAN_LOGS", "target": target_id, "reason": "no_root"},
         )
-
-    # Cooldown check
     if current_step - node.last_clean_logs_step <= CLEAN_LOGS_COOLDOWN:
         return ActionResult(
-            success=False,
-            reward=0.0,
-            suspicion_delta=0.0,
+            success=False, reward=0.0, suspicion_delta=0.0,
             info={"action": "CLEAN_LOGS", "target": target_id, "reason": "cooldown"},
         )
-
-    # Diminishing returns
     idx = min(node.clean_logs_count, len(CLEAN_LOGS_SEQUENCE) - 1)
     suspicion_change = CLEAN_LOGS_SEQUENCE[idx]
-
     node.reduce_suspicion(abs(suspicion_change), bypass_floor=True)
     node.clean_logs_count += 1
     node.last_clean_logs_step = current_step
-    node.detectable_traces.clear()  # cleans all traces
-
+    node.detectable_traces.clear()
     return ActionResult(
-        success=True,
-        reward=0.0,
-        suspicion_delta=suspicion_change,
+        success=True, reward=0.0, suspicion_delta=suspicion_change,
         info={"action": "CLEAN_LOGS", "target": target_id, "reduction": suspicion_change},
     )
 
@@ -724,10 +568,7 @@ def _execute_wait(
     """WAIT: do nothing. Suspicion decays on all nodes."""
     for node in network.nodes.values():
         node.reduce_suspicion(abs(SUSPICION_WAIT_DECAY))
-
     return ActionResult(
-        success=True,
-        reward=0.0,
-        suspicion_delta=SUSPICION_WAIT_DECAY,
+        success=True, reward=0.0, suspicion_delta=SUSPICION_WAIT_DECAY,
         info={"action": "WAIT"},
     )

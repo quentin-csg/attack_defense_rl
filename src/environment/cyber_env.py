@@ -1,10 +1,4 @@
-"""CyberEnv — main Gymnasium environment for the attack/defense RL project.
-
-Implements the full Red Team environment with:
-- Flat Discrete action space with action masking (CORRECTION 1)
-- Padded observations for variable network sizes (CORRECTION 2)
-- Calibrated rewards (CORRECTION 4)
-"""
+"""CyberEnv — Gymnasium environment for the attack/defense RL project."""
 
 from __future__ import annotations
 
@@ -49,7 +43,6 @@ from src.environment.node import DiscoveryLevel, SessionLevel
 logger = logging.getLogger(__name__)
 
 # Action types that move the agent to the target node on success.
-# Extracted as a module-level constant to avoid rebuilding the set on every step.
 _MOVEMENT_ACTIONS: frozenset[ActionType] = frozenset({
     ActionType.EXPLOIT,
     ActionType.BRUTE_FORCE,
@@ -61,17 +54,13 @@ _MOVEMENT_ACTIONS: frozenset[ActionType] = frozenset({
 class CyberEnv(gym.Env):
     """Gymnasium environment for Red Team cyber attack simulation.
 
-    The agent controls a Red Team attacker that must navigate a network,
-    compromise nodes, and exfiltrate data while staying under the Blue Team's
-    detection thresholds.
-
     Observation space (Dict):
-        - node_features: Box(MAX_NODES, N_NODE_FEATURES) — per-node features
-        - adjacency: Box(MAX_NODES, MAX_NODES) — adjacency matrix
-        - node_exists_mask: MultiBinary(MAX_NODES) — which slots are real nodes
-        - fog_mask: MultiBinary(MAX_NODES) — which nodes are discovered
-        - agent_position: Discrete(MAX_NODES) — current Red Team position
-        - global_features: Box(N_GLOBAL_FEATURES,) — step/compromised/discovered
+        - node_features: Box(MAX_NODES, N_NODE_FEATURES)
+        - adjacency: Box(MAX_NODES, MAX_NODES)
+        - node_exists_mask: MultiBinary(MAX_NODES)
+        - fog_mask: MultiBinary(MAX_NODES)
+        - agent_position: Discrete(MAX_NODES)
+        - global_features: Box(N_GLOBAL_FEATURES,)
 
     Action space: Discrete(N_ACTION_TYPES * MAX_NODES)
         Decoded as: action_type = action // MAX_NODES, target = action % MAX_NODES
@@ -91,14 +80,14 @@ class CyberEnv(gym.Env):
         """Initialise CyberEnv.
 
         Args:
-            network: Fixed network to use every episode (original behaviour).
+            network: Fixed network (original behaviour).
             network_factory: Callable(seed) → Network. When provided, a new
-                network is generated on each reset() call (Phase 5 PCG mode).
-                Takes precedence over ``network`` if both are supplied.
+                network is generated on each reset() (PCG mode). Takes
+                precedence over ``network`` if both are supplied.
             max_steps: Maximum steps per episode.
-            seed: Random seed for the episode RNGs.
-            render_mode: ``"human"`` or ``"rgb_array"`` for Pygame rendering.
-            blue_team: Optional ScriptedBlueTeam (Phase 4+). None = no defender.
+            seed: Random seed.
+            render_mode: ``"human"`` or ``"rgb_array"``.
+            blue_team: Optional ScriptedBlueTeam. None = no defender.
         """
         super().__init__()
 
@@ -107,82 +96,46 @@ class CyberEnv(gym.Env):
         self._seed = seed
         self._rng = random.Random(seed)
         self._np_rng = np.random.default_rng(seed)
-
-        # Blue Team (optional — None means no defender, backward-compatible)
         self.blue_team = blue_team
-
-        # Network factory (Phase 5 PCG): when set, reset() generates a new
-        # topology each episode.
         self._network_factory: Callable[[int | None], Network] | None = network_factory
 
-        # Network setup
         if network_factory is not None:
-            # Use the factory to build the initial network
             self.network: Network = network_factory(seed)
         elif network is not None:
             self.network = network
         else:
             self.network = build_fixed_network(seed)
 
-        # Fog of war
         self.fog = FogOfWar()
-
-        # Precompute adjacency template
         self._base_adjacency = self._build_adjacency()
 
-        # --- Spaces (defined once in __init__, not in reset) ---
         self.observation_space = spaces.Dict(
             {
-                "node_features": spaces.Box(
-                    low=-1.0,
-                    high=1.0,
-                    shape=(MAX_NODES, N_NODE_FEATURES),
-                    dtype=np.float32,
-                ),
-                "adjacency": spaces.Box(
-                    low=0.0,
-                    high=1.0,
-                    shape=(MAX_NODES, MAX_NODES),
-                    dtype=np.float32,
-                ),
+                "node_features": spaces.Box(low=-1.0, high=1.0,
+                    shape=(MAX_NODES, N_NODE_FEATURES), dtype=np.float32),
+                "adjacency": spaces.Box(low=0.0, high=1.0,
+                    shape=(MAX_NODES, MAX_NODES), dtype=np.float32),
                 "node_exists_mask": spaces.MultiBinary(MAX_NODES),
                 "fog_mask": spaces.MultiBinary(MAX_NODES),
                 "agent_position": spaces.Discrete(MAX_NODES),
-                "global_features": spaces.Box(
-                    low=0.0,
-                    high=1.0,
-                    shape=(N_GLOBAL_FEATURES,),
-                    dtype=np.float32,
-                ),
+                "global_features": spaces.Box(low=0.0, high=1.0,
+                    shape=(N_GLOBAL_FEATURES,), dtype=np.float32),
             }
         )
-
         self.action_space = spaces.Discrete(N_ACTION_TYPES * MAX_NODES)
 
-        # Dynamic exfiltrate reward — scales with episode budget so the ratio
-        # REWARD_EXFILTRATE_RATIO × |PER_STEP × max_steps| > 1 always holds.
-        # Floor at REWARD_EXFILTRATE (150) for short test budgets (max_steps < 150).
+        # Dynamic rewards — scale with episode budget so ratio REWARD/cost > 1 always holds.
         self._exfiltrate_reward: float = max(
             REWARD_EXFILTRATE,
             REWARD_EXFILTRATE_RATIO * abs(REWARD_PER_STEP) * self.max_steps,
         )
-
-        # Dynamic detection penalty — scales proportionally with the win reward so
-        # risk/reward ratio stays constant across network sizes.
-        # Floor at abs(REWARD_DETECTED)=50 for backward compat with fixed network.
-        # Small(150): -max(50,50)=-50  Medium(250): -max(50,83)=-83  Large(400): -max(50,133)=-133
         self._detected_reward: float = -max(
             abs(REWARD_DETECTED),
             REWARD_DETECTED_RATIO * self._exfiltrate_reward,
         )
-
-        # Exploration reward scale — normalises total discovery/compromise budget
-        # to ~REWARD_EXPLORATION_NODES nodes' worth, so large networks don't give
-        # more exploration reward than the win reward.
-        # scale = min(1.0, 20 / n_nodes):  Small(12)→1.0  Medium(27)→0.74  Large(55)→0.36
+        # Exploration scale: keeps total discovery budget ~constant across network sizes.
         self._exploration_scale: float = min(1.0, REWARD_EXPLORATION_NODES / self.network.num_nodes)
 
-        # Episode state
         self.current_step: int = 0
         self.agent_position: int = 0
         self.has_dumped_creds: bool = False
@@ -192,19 +145,14 @@ class CyberEnv(gym.Env):
         self._detected: bool = False
 
         # Adjacency dirty flag: set when Blue Team isolates/restores a node.
-        # Also tracked via _last_isolated_set to handle direct network.isolate_node()
-        # calls (e.g., tests, visualize script) that bypass step().
         self._adjacency_dirty: bool = False
         self._last_isolated_set: frozenset[int] = frozenset()
 
-        # Render state accumulators (used by _build_render_state)
-        self._action_log: list[Any] = []   # list[LogEntry], lazy import to avoid Pygame dep
+        self._action_log: list[Any] = []
         self._attacker_path: list[int] = []
         self._last_action_type: str | None = None
         self._last_action_target: int | None = None
         self._last_action_success: bool = False
-
-        # Renderer (created lazily on first render() call)
         self._renderer: Any = None
 
     def _build_adjacency(self) -> np.ndarray:
@@ -221,38 +169,27 @@ class CyberEnv(gym.Env):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-        """Reset the environment for a new episode.
-
-        Returns:
-            (observation, info) tuple as required by Gymnasium >= 0.26.
-        """
+        """Reset the environment for a new episode."""
         super().reset(seed=seed)
 
         if seed is not None:
             self._rng = random.Random(seed)
             self._np_rng = np.random.default_rng(seed)
 
-        # PCG mode: generate a new network topology each episode
         if self._network_factory is not None:
             episode_seed = self._rng.randint(0, 2**31)
             self.network = self._network_factory(episode_seed)
-            # Recompute exploration scale for the new topology
             self._exploration_scale = min(1.0, REWARD_EXPLORATION_NODES / self.network.num_nodes)
 
-        # Reset network state (node suspicion, sessions, etc.)
         self.network.reset_all_nodes()
         self._base_adjacency = self._build_adjacency()
 
-        # Re-randomise Blue Team thresholds for the new episode
         if self.blue_team is not None:
             self.blue_team.reset()
 
-        # Invalidate renderer layout so it is recomputed on next render() call.
-        # Needed for Phase 5 (PCG) where topology changes between episodes.
         if self._renderer is not None:
             self._renderer.reset_layout()
 
-        # Episode state
         self.current_step = 0
         self.has_dumped_creds = False
         self.last_action = None
@@ -261,14 +198,11 @@ class CyberEnv(gym.Env):
         self._detected = False
         self._adjacency_dirty = False
         self._last_isolated_set = frozenset()
-
-        # Render accumulators
         self._action_log = []
         self._last_action_type = None
         self._last_action_target = None
         self._last_action_success = False
 
-        # Red Team starts at entry node with DISCOVERED status
         entry = self.network.entry_node_id
         self.agent_position = entry
         self._attacker_path = [entry]
@@ -276,40 +210,29 @@ class CyberEnv(gym.Env):
         entry_node.discovery_level = DiscoveryLevel.DISCOVERED
         entry_node.session_level = SessionLevel.USER
 
-        obs = self._get_obs()
-        info = self._get_info()
-
-        return obs, info
+        return self._get_obs(), self._get_info()
 
     def step(self, action: int) -> tuple[dict[str, np.ndarray], float, bool, bool, dict[str, Any]]:
-        """Execute one action and return (obs, reward, terminated, truncated, info).
-
-        Returns 5 values as required by Gymnasium.
-        """
+        """Execute one action and return (obs, reward, terminated, truncated, info)."""
         self.current_step += 1
-        reward = REWARD_PER_STEP  # time pressure
+        reward = REWARD_PER_STEP
 
-        # Decode action before repeat check so WAIT can be exempted
         action_type, target_node_id = decode_action(action)
 
-        # Repeated action penalty (WAIT is exempt — waiting is strategically valid)
+        # WAIT is exempt from the repeated-action penalty.
         if action == self.last_action and action_type != ActionType.WAIT:
             reward += REWARD_REPEATED_ACTION
         self.last_action = action
 
-        # Snapshot node states for exploration reward scaling (only when scale < 1)
         if self._exploration_scale < 1.0:
             _pre_disc = {nid: n.discovery_level for nid, n in self.network.nodes.items()}
             _pre_sess = {nid: n.session_level for nid, n in self.network.nodes.items()}
         else:
             _pre_disc = _pre_sess = None
 
-        # Validate target exists
         if target_node_id not in self.network.nodes:
-            # Invalid target — treat as failed WAIT
             result = ActionResult(
-                success=False,
-                reward=0.0,
+                success=False, reward=0.0,
                 info={"action": "INVALID", "target": target_node_id},
             )
         else:
@@ -325,15 +248,11 @@ class CyberEnv(gym.Env):
 
         reward += result.reward
 
-        # Scale exfiltrate reward dynamically with episode budget (CORRECTION 4 extension).
         if action_type in (ActionType.EXFILTRATE, ActionType.LIST_FILES) and result.success:
             reward += self._exfiltrate_reward - REWARD_EXFILTRATE
 
-        # Scale exploration rewards for large networks (Issue 7 balance fix).
-        # actions.py uses fixed constants; we apply a negative correction so
-        # total discovery+compromise budget stays ~constant across network sizes.
         if _pre_disc is not None:
-            scale_adj = self._exploration_scale - 1.0  # negative for large networks
+            scale_adj = self._exploration_scale - 1.0
             for nid, node in self.network.nodes.items():
                 if _pre_disc[nid] == DiscoveryLevel.UNKNOWN and node.discovery_level != DiscoveryLevel.UNKNOWN:
                     reward += REWARD_NEW_NODE_DISCOVERED * scale_adj
@@ -342,11 +261,9 @@ class CyberEnv(gym.Env):
                 if _pre_sess[nid] == SessionLevel.USER and node.session_level == SessionLevel.ROOT:  # type: ignore[index]
                     reward += REWARD_ROOT_OBTAINED * scale_adj
 
-        # Track credential dumps
         if action_type == ActionType.CREDENTIAL_DUMP and result.success:
             self.has_dumped_creds = True
 
-        # Update agent position only for explicit movement actions
         if action_type in _MOVEMENT_ACTIONS and result.success and target_node_id in self.network.nodes:
             target = self.network.get_node(target_node_id)
             if target.session_level != SessionLevel.NONE:
@@ -354,7 +271,6 @@ class CyberEnv(gym.Env):
                 if target_node_id not in self._attacker_path:
                     self._attacker_path.append(target_node_id)
 
-        # Accumulate render log entry (stored as plain tuple — converted to LogEntry in _build_render_state)
         self._last_action_type = action_type.name
         self._last_action_target = target_node_id
         self._last_action_success = result.success
@@ -363,14 +279,11 @@ class CyberEnv(gym.Env):
         status_str = "SUCCESS" if result.success else "FAIL"
         log_text = f"[{self.current_step}] {action_type.name} Node {target_node_id}: {status_str}{susp_str}"
         color_key = "red_success" if result.success else "red_fail"
-        # Store as (step, text, color_key) tuple — LogEntry created lazily in _build_render_state
         self._action_log.append((self.current_step, log_text, color_key))
 
-        # Check exfiltration success (EXFILTRATE = fixed-network path, LIST_FILES = PCG path)
         if action_type in (ActionType.EXFILTRATE, ActionType.LIST_FILES) and result.success:
             self.exfiltrated = True
 
-        # --- Blue Team acts (after Red, before detection check) ---
         if self.blue_team is not None and not self.exfiltrated:
             blue_actions = self.blue_team.act(self.network, self.current_step)
             for ba in blue_actions:
@@ -379,18 +292,12 @@ class CyberEnv(gym.Env):
                     f" Node {ba.target_node_id}: {ba.details}"
                 )
                 self._action_log.append((self.current_step, log_text, "blue_action"))
-                # Topology changed — mark adjacency for rebuild on next _get_obs()
                 if ba.action_type in ("ISOLATE_NODE", "RESTORE_NODE"):
                     self._adjacency_dirty = True
-                # ROTATE_CREDENTIALS invalidates dumped creds (A9)
                 if ba.action_type == "ROTATE_CREDENTIALS":
                     self.has_dumped_creds = False
 
-        # Check detection (any node suspicion >= max).
-        # Skip if the agent already exfiltrated this step — exfiltration wins,
-        # the simultaneous suspicion spike does not count as a detection.
-        # This prevents ambiguous outcomes where info["exfiltrated"] and
-        # info["detected"] are both True, which confuses Phase 4/6 metrics.
+        # Exfiltration wins over simultaneous detection — prevents ambiguous outcomes.
         detected = (
             not self.exfiltrated
             and any(n.suspicion_level >= SUSPICION_MAX for n in self.network.nodes.values())
@@ -400,15 +307,12 @@ class CyberEnv(gym.Env):
             self._detected = True
 
         self.episode_reward += reward
-
-        # Termination conditions
         terminated = self.exfiltrated or detected
         truncated = self.current_step >= self.max_steps
 
         obs = self._get_obs()
         info = self._get_info()
         info["action_result"] = result.info
-
         return obs, reward, terminated, truncated, info
 
     def action_masks(self) -> np.ndarray:
@@ -422,19 +326,15 @@ class CyberEnv(gym.Env):
 
     def _get_obs(self) -> dict[str, np.ndarray]:
         """Build the current observation."""
-        # Use cached adjacency; rebuild only when topology changed.
-        # Two triggers:
-        #   1. _adjacency_dirty — set by step() when Blue Team ISOLATE/RESTORE fires.
-        #   2. isolated_edges changed outside of step() (direct API calls, tests, scripts).
+        # Rebuild adjacency when topology changed (Blue Team ISOLATE/RESTORE or direct API).
         current_isolated = frozenset(self.network.isolated_edges.keys())
         if self._adjacency_dirty or current_isolated != self._last_isolated_set:
             self._base_adjacency = self._build_adjacency()
             self._adjacency_dirty = False
             self._last_isolated_set = current_isolated
-        adjacency = self._base_adjacency
         return self.fog.build_observation(
             nodes=self.network.nodes,
-            adjacency=adjacency,
+            adjacency=self._base_adjacency,
             current_step=self.current_step,
             max_steps=self.max_steps,
             num_real_nodes=self.network.num_nodes,
@@ -475,8 +375,7 @@ class CyberEnv(gym.Env):
     def _build_render_state(self) -> Any:
         """Build a RenderState snapshot for the Pygame renderer.
 
-        Lazy-imports RenderState and LogEntry to avoid pulling Pygame into
-        training mode (render_mode=None).
+        Lazy-imports RenderState to avoid pulling Pygame into training mode.
         """
         from src.visualization.render_state import LogEntry, RenderState
 
@@ -486,10 +385,7 @@ class CyberEnv(gym.Env):
             1 for n in self.network.nodes.values() if n.discovery_level == DiscoveryLevel.UNKNOWN
         )
         fog_pct = (n_unknown / n_total * 100.0) if n_total > 0 else 0.0
-
-        log_entries = [
-            LogEntry(step=s, text=t, color_key=c) for s, t, c in self._action_log
-        ]
+        log_entries = [LogEntry(step=s, text=t, color_key=c) for s, t, c in self._action_log]
         per_node_susp = {nid: n.suspicion_level for nid, n in self.network.nodes.items()}
 
         return RenderState(
@@ -511,19 +407,12 @@ class CyberEnv(gym.Env):
         )
 
     def render(self) -> np.ndarray | None:
-        """Render the current environment state.
-
-        Returns:
-            np.ndarray of shape (H, W, 3) for render_mode="rgb_array", else None.
-        """
+        """Render the current environment state."""
         if self.render_mode is None:
             return None
 
-        # Lazy import: avoids importing Pygame in training mode (render_mode=None).
         if self._renderer is None:
             from src.visualization.renderer import PygameRenderer
-
-            # rgb_array mode renders to an offscreen buffer — no real window needed.
             self._renderer = PygameRenderer(headless=(self.render_mode == "rgb_array"))
 
         state = self._build_render_state()
@@ -537,12 +426,7 @@ class CyberEnv(gym.Env):
 
     @property
     def renderer_controls(self):
-        """DashboardControls owned by the renderer (pause, speed).
-
-        Returns None if the renderer has not been created yet (no render call made).
-        Use this in scripts to read pause/speed state without handling Pygame events
-        directly — the renderer is the sole consumer of the Pygame event queue.
-        """
+        """DashboardControls owned by the renderer (pause, speed). None if not yet created."""
         if self._renderer is None:
             return None
         return self._renderer.controls

@@ -1,19 +1,4 @@
-"""Scripted Blue Team agent for Phase 4.
-
-Rule-based defender that acts after each Red Team step. Uses noisy thresholds
-(re-randomised on reset) so the Red agent cannot learn to exploit fixed timing.
-
-Actions:
-    ALERT            — marks a node under surveillance (suspicion x2 multiplier)
-    ROTATE_CREDENTIALS — invalidates Red sessions on a node (unless backdoor)
-    ISOLATE_NODE     — disconnects a node from the network
-    PATROL           — stochastic trace detection (Poisson process, CORRECTION 3)
-
-Usage:
-    blue = ScriptedBlueTeam(seed=42)
-    blue.reset()                                 # re-randomise thresholds
-    actions = blue.act(network, current_step)    # returns list[BlueAction]
-"""
+"""Scripted Blue Team agent — rule-based defender with adaptive patrol."""
 
 from __future__ import annotations
 
@@ -30,7 +15,11 @@ from src.config import (
     BLUE_ROTATE_NOISE,
     BLUE_ROTATE_THRESHOLD,
     PATROL_DETECTION_SUSPICION,
+    PATROL_HOT_DURATION,
+    PATROL_HOT_WEIGHT,
     PATROL_INTERVAL,
+    PATROL_NEIGHBOR_WEIGHT,
+    PATROL_SUSPICION_DELTA_MIN,
 )
 from src.environment.network import Network
 
@@ -38,21 +27,28 @@ from src.environment.network import Network
 class BlueAction(NamedTuple):
     """Record of a single Blue Team action for logging and rendering."""
 
-    action_type: str   # "ALERT", "ROTATE_CREDENTIALS", "ISOLATE_NODE", "PATROL"
+    action_type: str
     target_node_id: int
-    details: str       # human-readable description for the action log
+    details: str
 
 
 class ScriptedBlueTeam:
     """Rule-based Blue Team agent.
 
-    Thresholds are randomised within a noise band on each ``reset()`` call so
+    Thresholds are randomised within a noise band on each ``reset()`` so
     the Red agent cannot memorise exact trigger points.
+
+    Patrol targeting is weighted by recent suspicion activity. Nodes where
+    suspicion rose since the last step are flagged "hot" and patrolled more
+    often. Hot status decays after ``hot_duration`` steps, so the blue team
+    naturally follows the attacker as it moves through the network.
 
     Args:
         seed: Random seed for threshold noise and patrol selection.
-        patrol_interval: Mean number of steps between patrols (Poisson rate).
-                         Configurable for Phase 6 dynamic handicap.
+        patrol_interval: Mean steps between patrols (Poisson rate).
+        isolate_duration: Steps before an isolated node is auto-restored.
+        hot_duration: Steps a node stays hot after its last suspicion rise.
+            Callers should pass ``max(PATROL_HOT_DURATION, max_steps // 20)``.
     """
 
     def __init__(
@@ -60,47 +56,36 @@ class ScriptedBlueTeam:
         seed: int = 42,
         patrol_interval: int = PATROL_INTERVAL,
         isolate_duration: int | None = None,
+        hot_duration: int | None = None,
     ) -> None:
         self._rng = random.Random(seed)
         self._patrol_interval = patrol_interval
-        # Isolation duration: None → use config default. Pass max_steps // 25 from
-        # the env wrapper so large episodes have proportionally longer isolations.
-        self._isolate_duration: int = isolate_duration if isolate_duration is not None else BLUE_ISOLATE_DURATION
-        self._isolated_at: dict[int, int] = {}   # node_id -> step it was isolated
-        self._last_rotate: dict[int, int] = {}   # node_id -> last step ROTATE fired
-        self._surveillance_logged: set[int] = set()  # nodes already logged as under surveillance
+        self._isolate_duration: int = (
+            isolate_duration if isolate_duration is not None else BLUE_ISOLATE_DURATION
+        )
+        self._hot_duration: int = (
+            hot_duration if hot_duration is not None else PATROL_HOT_DURATION
+        )
+        self._isolated_at: dict[int, int] = {}
+        self._last_rotate: dict[int, int] = {}
+        self._surveillance_logged: set[int] = set()
+        self._prev_suspicion: dict[int, float] = {}
+        self._hot_nodes: dict[int, int] = {}
         self._randomize_thresholds()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def reset(self) -> None:
         """Re-randomise noisy thresholds for a new episode."""
         self._isolated_at = {}
         self._last_rotate = {}
         self._surveillance_logged = set()
+        self._prev_suspicion = {}
+        self._hot_nodes = {}
         self._randomize_thresholds()
 
     def act(self, network: Network, current_step: int) -> list[BlueAction]:
-        """Execute one Blue Team step and return the list of actions taken.
-
-        Order of operations:
-        1. Stochastic patrol (Poisson process).
-        2. Threshold checks per node — highest threshold first so ISOLATE
-           takes priority over ROTATE, which takes priority over ALERT.
-
-        Args:
-            network: The current network state (modified in place).
-            current_step: Current episode step (unused but available for
-                          future extensions like cooldown tracking).
-
-        Returns:
-            List of BlueAction records in the order they were applied.
-        """
+        """Execute one Blue Team step and return the list of actions taken."""
         actions: list[BlueAction] = []
 
-        # 0. Auto-restore isolated nodes whose duration has elapsed (A6)
         to_restore = [
             nid for nid, step in self._isolated_at.items()
             if current_step - step >= self._isolate_duration
@@ -115,31 +100,20 @@ class ScriptedBlueTeam:
             detail = f"Isolation expired after {self._isolate_duration} steps"
             if was_logged:
                 detail += " — surveillance lifted"
-            actions.append(BlueAction(
-                action_type="RESTORE_NODE",
-                target_node_id=nid,
-                details=detail,
-            ))
+            actions.append(BlueAction(action_type="RESTORE_NODE", target_node_id=nid, details=detail))
 
-        # 1. Stochastic patrol (CORRECTION 3 — Poisson, not deterministic).
-        # Scale patrol frequency with network size so per-node coverage stays
-        # roughly constant: scale = max(1, n_online // 10).
-        # Small (~12 nodes): scale=1, prob=1/5=0.20 (unchanged)
-        # Medium (~27 nodes): scale=2, prob=2/5=0.40
-        # Large (~55 nodes):  scale=5, prob=5/5=1.00 (every step)
+        self._update_hot_nodes(network, current_step)
+
         online_nodes = [nid for nid, n in network.nodes.items() if n.is_online]
         patrol_scale = max(1, len(online_nodes) // 10)
         if self._rng.random() < patrol_scale / self._patrol_interval:
-            patrol_action = self._patrol_from(network, online_nodes)
+            patrol_action = self._patrol_from(network, online_nodes, current_step)
             if patrol_action is not None:
                 actions.append(patrol_action)
 
-        # 2. Threshold-based responses — check from highest to lowest priority
-        #    so each node only triggers one action per step.
         for node_id, node in network.nodes.items():
             if not node.is_online:
-                continue  # already isolated — no further action needed
-
+                continue
             if node.suspicion_level >= self._isolate_thresh:
                 actions.append(self._isolate(network, node_id, current_step))
             elif node.suspicion_level >= self._rotate_thresh:
@@ -151,48 +125,61 @@ class ScriptedBlueTeam:
                 if alert_action is not None:
                     actions.append(alert_action)
 
+        # Snapshot after all blue actions so next delta only captures red-caused rises.
+        self._prev_suspicion = {nid: n.suspicion_level for nid, n in network.nodes.items()}
+
         return actions
 
-    # ------------------------------------------------------------------
-    # Threshold randomisation
-    # ------------------------------------------------------------------
-
     def _randomize_thresholds(self) -> None:
-        """Draw noisy thresholds within their configured bands."""
-        self._alert_thresh = BLUE_ALERT_THRESHOLD + self._rng.uniform(
-            -BLUE_ALERT_NOISE, BLUE_ALERT_NOISE
-        )
-        self._rotate_thresh = BLUE_ROTATE_THRESHOLD + self._rng.uniform(
-            -BLUE_ROTATE_NOISE, BLUE_ROTATE_NOISE
-        )
-        self._isolate_thresh = BLUE_ISOLATE_THRESHOLD + self._rng.uniform(
-            -BLUE_ISOLATE_NOISE, BLUE_ISOLATE_NOISE
-        )
-        # Clamp to valid suspicion range [0, 100]
-        self._alert_thresh = max(0.0, min(100.0, self._alert_thresh))
-        self._rotate_thresh = max(0.0, min(100.0, self._rotate_thresh))
-        self._isolate_thresh = max(0.0, min(100.0, self._isolate_thresh))
+        self._alert_thresh = max(0.0, min(100.0,
+            BLUE_ALERT_THRESHOLD + self._rng.uniform(-BLUE_ALERT_NOISE, BLUE_ALERT_NOISE)))
+        self._rotate_thresh = max(0.0, min(100.0,
+            BLUE_ROTATE_THRESHOLD + self._rng.uniform(-BLUE_ROTATE_NOISE, BLUE_ROTATE_NOISE)))
+        self._isolate_thresh = max(0.0, min(100.0,
+            BLUE_ISOLATE_THRESHOLD + self._rng.uniform(-BLUE_ISOLATE_NOISE, BLUE_ISOLATE_NOISE)))
 
-    # ------------------------------------------------------------------
-    # Action implementations
-    # ------------------------------------------------------------------
+    def _update_hot_nodes(self, network: Network, current_step: int) -> None:
+        """Flag nodes where suspicion rose since the last step (red activity signal)."""
+        for node_id, node in network.nodes.items():
+            if not node.is_online:
+                continue
+            prev = self._prev_suspicion.get(node_id, 0.0)
+            if node.suspicion_level - prev >= PATROL_SUSPICION_DELTA_MIN:
+                self._hot_nodes[node_id] = current_step
 
-    def _patrol_from(self, network: Network, online_nodes: list[int]) -> BlueAction | None:
-        """Inspect a random online node for detectable Red traces.
+    def _build_patrol_weights(
+        self, online_nodes: list[int], network: Network, current_step: int
+    ) -> list[float]:
+        """Compute per-node patrol weights. Hot nodes 5×, their neighbors 2.5×, others 1.0."""
+        self._hot_nodes = {
+            nid: step
+            for nid, step in self._hot_nodes.items()
+            if current_step - step < self._hot_duration
+        }
+        if not self._hot_nodes:
+            return [1.0] * len(online_nodes)
+        hot_neighbors: set[int] = {
+            nb
+            for hot_nid in self._hot_nodes
+            for nb in network.get_neighbors(hot_nid)
+            if nb not in self._hot_nodes
+        }
+        return [
+            PATROL_HOT_WEIGHT if nid in self._hot_nodes
+            else PATROL_NEIGHBOR_WEIGHT if nid in hot_neighbors
+            else 1.0
+            for nid in online_nodes
+        ]
 
-        If traces are found: add PATROL_DETECTION_SUSPICION and mark the
-        node under surveillance (future Red actions = suspicion x2).
-
-        Args:
-            network: Current network state.
-            online_nodes: Pre-computed list of online node IDs (avoids re-scan).
-        """
+    def _patrol_from(
+        self, network: Network, online_nodes: list[int], current_step: int
+    ) -> BlueAction | None:
+        """Inspect a node for detectable Red traces, weighted toward hot nodes."""
         if not online_nodes:
             return None
-
-        target_id = self._rng.choice(online_nodes)
+        weights = self._build_patrol_weights(online_nodes, network, current_step)
+        target_id = self._rng.choices(online_nodes, weights=weights, k=1)[0]
         node = network.get_node(target_id)
-
         if node.detectable_traces:
             node.add_suspicion(PATROL_DETECTION_SUSPICION)
             already_surveilled = node.is_under_surveillance
@@ -205,23 +192,13 @@ class ScriptedBlueTeam:
                 target_node_id=target_id,
                 details=f"Traces detected: {traces_str} (+{PATROL_DETECTION_SUSPICION:.0f} Susp){suffix}",
             )
-
-        return BlueAction(
-            action_type="PATROL",
-            target_node_id=target_id,
-            details="No traces found",
-        )
+        return BlueAction(action_type="PATROL", target_node_id=target_id, details="No traces found")
 
     def _alert(self, network: Network, node_id: int) -> BlueAction | None:
-        """Mark a node under enhanced surveillance.
-
-        Returns None if this node was already logged as under surveillance this
-        episode (avoids spamming the action log every step).
-        """
         node = network.get_node(node_id)
         node.is_under_surveillance = True
         if node_id in self._surveillance_logged:
-            return None  # already reported — suppress duplicate log entry
+            return None
         self._surveillance_logged.add(node_id)
         return BlueAction(
             action_type="ALERT",
@@ -230,38 +207,24 @@ class ScriptedBlueTeam:
         )
 
     def _rotate(self, network: Network, node_id: int, current_step: int) -> BlueAction | None:
-        """Invalidate Red sessions on a node via credential rotation.
-
-        Calls reset_session() which respects has_backdoor (if backdoor is
-        installed, the session survives rotation).
-
-        Returns None if ROTATE_COOLDOWN has not elapsed since the last rotation
-        on this node (downgraded to no-action; ALERT was already applied).
-        """
         if current_step - self._last_rotate.get(node_id, -BLUE_ROTATE_COOLDOWN - 1) < BLUE_ROTATE_COOLDOWN:
-            return None  # cooldown active — skip rotation this step
+            return None
         self._last_rotate[node_id] = current_step
         node = network.get_node(node_id)
         had_session = node.session_level.value > 0
         node.reset_session()
-        protected = had_session and node.session_level.value > 0  # backdoor protected it
+        protected = had_session and node.session_level.value > 0
         detail = (
             f"Susp={node.suspicion_level:.0f} — session preserved (backdoor)"
             if protected
             else f"Susp={node.suspicion_level:.0f} — session invalidated"
         )
-        return BlueAction(
-            action_type="ROTATE_CREDENTIALS",
-            target_node_id=node_id,
-            details=detail,
-        )
+        return BlueAction(action_type="ROTATE_CREDENTIALS", target_node_id=node_id, details=detail)
 
     def _isolate(self, network: Network, node_id: int, current_step: int) -> BlueAction:
-        """Disconnect a node from the network (auto-restores after self._isolate_duration steps)."""
         node = network.get_node(node_id)
         network.isolate_node(node_id)
         self._isolated_at[node_id] = current_step
-        # An isolated node is always under surveillance (re-set in case RESTORE cleared it).
         node.is_under_surveillance = True
         self._surveillance_logged.add(node_id)
         return BlueAction(
@@ -270,21 +233,18 @@ class ScriptedBlueTeam:
             details=f"Susp={node.suspicion_level:.0f} — node isolated",
         )
 
-    # ------------------------------------------------------------------
-    # Inspection helpers (for tests and debugging)
-    # ------------------------------------------------------------------
-
     @property
     def alert_threshold(self) -> float:
-        """Current noisy ALERT threshold."""
         return self._alert_thresh
 
     @property
     def rotate_threshold(self) -> float:
-        """Current noisy ROTATE_CREDENTIALS threshold."""
         return self._rotate_thresh
 
     @property
     def isolate_threshold(self) -> float:
-        """Current noisy ISOLATE_NODE threshold."""
         return self._isolate_thresh
+
+    @property
+    def hot_nodes(self) -> dict[int, int]:
+        return dict(self._hot_nodes)
