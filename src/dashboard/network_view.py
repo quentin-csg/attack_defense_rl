@@ -1,10 +1,3 @@
-"""NetworkX graph rendering for the Streamlit training dashboard.
-
-Renders the network as an interactive Plotly figure, with nodes coloured by
-suspicion level (green -> yellow -> red scale). Supports both the fixed 8-node
-network and dynamically generated PCG networks (small/medium/large).
-"""
-
 from __future__ import annotations
 
 import networkx as nx
@@ -91,18 +84,6 @@ def render_network_graph(
     topology_data: dict | None = None,
     seed: int = 42,
 ) -> None:
-    """Render the network graph as an interactive Plotly chart in Streamlit.
-
-    Args:
-        network: The Network to visualise. Overrides topology_data if provided.
-        suspicion_data: Optional dict mapping node_id -> suspicion level (0-100).
-                        When provided, nodes are coloured by suspicion.
-                        When None, nodes are coloured by session level.
-        topology_data: Serialised topology dict from ``CyberEnv._get_info()``.
-                       Used when network is None and topology_data is available.
-                       Falls back to the fixed network if both are None.
-        seed: Layout seed for reproducible spring_layout positions.
-    """
     st.subheader("Network Graph")
 
     if network is None:

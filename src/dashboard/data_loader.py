@@ -1,10 +1,3 @@
-"""Data loading utilities for the Streamlit training dashboard.
-
-Reads metrics from two sources:
-- ``logs/dashboard_metrics.jsonl`` — written by DashboardCallback during training
-- ``logs/evaluations.npz`` — written by MaskableEvalCallback at each eval checkpoint
-"""
-
 from __future__ import annotations
 
 import json
@@ -14,12 +7,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import streamlit as st
-
-
-# ---------------------------------------------------------------------------
-# Internal cached loader — invalidates only when the file changes on disk
-# ---------------------------------------------------------------------------
-
 
 @st.cache_data(show_spinner=False)
 def _load_metrics_cached(path: str, _mtime: float) -> pd.DataFrame:

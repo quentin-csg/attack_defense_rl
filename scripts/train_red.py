@@ -1,14 +1,3 @@
-"""Train the Red Team agent with MaskablePPO.
-
-Usage:
-    python scripts/train_red.py                                        # fixed network (Phase 3/4)
-    python scripts/train_red.py --blue-team                            # + Blue Team (Phase 4)
-    python scripts/train_red.py --pcg small                            # PCG small networks (Phase 5)
-    python scripts/train_red.py --pcg medium --blue-team               # PCG medium + Blue Team
-    python scripts/train_red.py --pcg curriculum --blue-team           # full curriculum
-    python scripts/train_red.py --timesteps 100000 --run-name my_exp   # custom budget/name
-"""
-
 from __future__ import annotations
 
 import argparse

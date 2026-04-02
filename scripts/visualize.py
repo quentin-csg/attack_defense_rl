@@ -1,22 +1,3 @@
-"""Visualize a CyberEnv episode in the Pygame window.
-
-Usage:
-    python scripts/visualize.py                                       # random actions, fixed network
-    python scripts/visualize.py --seed 123                            # custom seed
-    python scripts/visualize.py --speed 3                             # slower (default 10 FPS)
-    python scripts/visualize.py --model models/red_agent_final.zip    # trained agent
-    python scripts/visualize.py --pcg small                           # random PCG network (small)
-    python scripts/visualize.py --pcg medium --model models/...zip    # PCG + trained agent
-    python scripts/visualize.py --pcg small --blue-team               # with active Blue Team defender
-
-Controls (keyboard):
-    SPACE      pause / resume
-    + / UP     speed up
-    - / DOWN   slow down
-    R          restart episode (new network in PCG mode)
-    ESC        quit
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -27,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 
-# Add project root to Python path so `src` is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.environment.cyber_env import CyberEnv

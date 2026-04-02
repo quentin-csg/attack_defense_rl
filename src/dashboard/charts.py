@@ -1,10 +1,3 @@
-"""Streamlit chart rendering for the training dashboard.
-
-All functions use Streamlit-native charts (Altair under the hood) to stay
-lightweight. Each function is self-contained and safe to call with an empty
-DataFrame — it will show an informational message instead of crashing.
-"""
-
 from __future__ import annotations
 
 import altair as alt

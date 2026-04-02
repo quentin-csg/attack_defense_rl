@@ -1,14 +1,3 @@
-"""Evaluate a trained Red Team model over N episodes.
-
-Usage:
-    python scripts/evaluate.py models/red_agent_final.zip
-    python scripts/evaluate.py models/red_agent_final.zip --episodes 200
-    python scripts/evaluate.py models/red_agent_final.zip --seed 0 --stochastic
-    python scripts/evaluate.py models/pcg_small_final.zip --pcg small
-    python scripts/evaluate.py models/vs_blue_final.zip --blue-team
-    python scripts/evaluate.py models/pcg_blue.zip --pcg medium --blue-team
-"""
-
 from __future__ import annotations
 
 import argparse

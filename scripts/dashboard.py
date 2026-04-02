@@ -1,27 +1,3 @@
-"""Streamlit training dashboard for the Attack & Defense RL project.
-
-Launch with:
-    streamlit run scripts/dashboard.py
-
-Modes:
-    Live   — auto-refreshes every N seconds to show metrics during training
-    Replay — loads a saved JSONL file for post-training exploration
-             + step slider to scrub through the training history
-
-Layout:
-    ┌─────────────────────────────────────────────────┐
-    │  Attack & Defense RL — Training Dashboard       │
-    ├──────────┬──────────┬──────────┬────────────────│
-    │Timesteps │ Episodes │ Exfil %  │ Detection %    │  KPI row
-    ├──────────┴──────────┴──────────┴────────────────│
-    │  Training Curves    │   Cyber Metrics           │
-    │  (Loss, Entropy)    │   (Exfil, Nodes, Susp.)   │
-    ├─────────────────────┼───────────────────────────│
-    │  Network Graph      │   Eval Checkpoints        │
-    │  (heatmap)          │   (reward ± std)          │
-    └─────────────────────┴───────────────────────────┘
-"""
-
 from __future__ import annotations
 
 import json
@@ -31,9 +7,6 @@ from pathlib import Path
 
 import streamlit as st
 
-# Allow `src/` imports when running from the project root.
-# `streamlit run scripts/dashboard.py` sets cwd to the project root,
-# so adding "." is enough.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.dashboard.charts import (
