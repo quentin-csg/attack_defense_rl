@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.agents.red_trainer import evaluate, train, train_curriculum
+from src.agents.red_trainer import evaluate, train
 from src.agents.wrappers import make_masked_env, make_pcg_masked_env
 from src.config import (
     DEFAULT_MAX_STEPS,
@@ -106,27 +106,54 @@ def main() -> None:
         print(f"PCG mode: {pcg_mode.upper()}")
     else:
         print(f"Network: fixed 8-node | timesteps={args.timesteps:,}")
-    print(f"Logs -> {log_dir}  |  Models -> {save_dir}")
-    print(f"TensorBoard: tensorboard --logdir {log_dir}\n")
+    print("TensorBoard: tensorboard --logdir logs/\n")
 
     # --- Curriculum mode ---
     if pcg_mode == "curriculum":
-        from src.pcg.curriculum import CurriculumManager
-        curriculum = CurriculumManager(seed=args.seed)
-        total = curriculum.total_timesteps
-        print(f"Curriculum total timesteps: {total:,}")
-        model = train_curriculum(
-            curriculum=curriculum,
-            seed=args.seed,
-            log_dir=log_dir,
-            save_dir=save_dir,
-            blue_team=blue_team,
-            eval_freq=args.eval_freq,
-            eval_episodes=args.eval_episodes,
-            save_freq=args.save_freq,
+        from src.config import (
+            CURRICULUM_TIMESTEPS_LARGE,
+            CURRICULUM_TIMESTEPS_MEDIUM,
+            CURRICULUM_TIMESTEPS_SMALL,
+            PCG_MAX_STEPS_LARGE,
+            PCG_MAX_STEPS_MEDIUM,
+            PCG_MAX_STEPS_SMALL,
         )
-        eval_env = make_pcg_masked_env(size="small", seed=args.seed + 9999, blue_team=blue_team)
-        final_label = f"{save_dir}/red_agent_curriculum_final.zip"
+
+        stages = [
+            ("small",  CURRICULUM_TIMESTEPS_SMALL,  PCG_MAX_STEPS_SMALL),
+            ("medium", CURRICULUM_TIMESTEPS_MEDIUM, PCG_MAX_STEPS_MEDIUM),
+            ("large",  CURRICULUM_TIMESTEPS_LARGE,  PCG_MAX_STEPS_LARGE),
+        ]
+        total_ts = CURRICULUM_TIMESTEPS_SMALL + CURRICULUM_TIMESTEPS_MEDIUM + CURRICULUM_TIMESTEPS_LARGE
+
+        print(f"Curriculum | total={total_ts:,} | small={CURRICULUM_TIMESTEPS_SMALL:,} / medium={CURRICULUM_TIMESTEPS_MEDIUM:,} / large={CURRICULUM_TIMESTEPS_LARGE:,}")
+        print(f"Runs : logs/{run_name}_small  /  logs/{run_name}_medium  /  logs/{run_name}_large\n")
+
+        prev_model_path = None
+        model = None
+        for size, ts, max_steps_pcg in stages:
+            stage_log  = f"logs/{run_name}_{size}"
+            stage_save = f"models/{run_name}_{size}"
+            print(f"\n=== Stage {size.upper()} | timesteps={ts:,} ===")
+            if prev_model_path:
+                print(f"Transfer depuis : {prev_model_path}")
+            model = train(
+                total_timesteps=ts,
+                seed=args.seed,
+                log_dir=stage_log,
+                save_dir=stage_save,
+                max_steps=max_steps_pcg,
+                eval_freq=args.eval_freq,
+                eval_episodes=args.eval_episodes,
+                save_freq=args.save_freq,
+                blue_team=blue_team,
+                pcg_size=size,
+                load_model_path=prev_model_path,
+            )
+            prev_model_path = f"{stage_save}/red_agent_final.zip"
+
+        eval_env = make_pcg_masked_env(size="large", seed=args.seed + 9999, blue_team=blue_team)
+        final_label = f"models/{run_name}_large/red_agent_final.zip"
 
     # --- Single PCG size mode ---
     elif pcg_mode in ("small", "medium", "large"):

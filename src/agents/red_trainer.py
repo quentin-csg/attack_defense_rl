@@ -89,6 +89,7 @@ def train(
     dashboard_log_path: str | None = None,
     blue_team: object = None,
     pcg_size: str | None = None,
+    load_model_path: str | None = None,
 ) -> MaskablePPO:
     """Run the full Red Team training pipeline."""
     if log_dir is not None:
@@ -115,7 +116,12 @@ def train(
 
     model: MaskablePPO | None = None  # guard against UnboundLocalError if create_model raises
     try:
-        model = create_model(train_env, log_dir=log_dir, seed=seed)
+        if load_model_path is not None:
+            model = MaskablePPO.load(load_model_path, env=train_env, device="auto")
+            model.tensorboard_log = log_dir
+            logger.info("Loaded model from %s", load_model_path)
+        else:
+            model = create_model(train_env, log_dir=log_dir, seed=seed)
 
         # Derive dashboard log path from log_dir if not explicitly provided
         if not dashboard_log_path and not log_dir:
