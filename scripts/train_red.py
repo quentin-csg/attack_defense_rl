@@ -114,19 +114,29 @@ def main() -> None:
             CURRICULUM_TIMESTEPS_LARGE,
             CURRICULUM_TIMESTEPS_MEDIUM,
             CURRICULUM_TIMESTEPS_SMALL,
+            CURRICULUM_WORLDS_PER_STAGE,
             PCG_MAX_STEPS_LARGE,
             PCG_MAX_STEPS_MEDIUM,
             PCG_MAX_STEPS_SMALL,
         )
 
-        stages = [
-            ("small",  CURRICULUM_TIMESTEPS_SMALL,  PCG_MAX_STEPS_SMALL),
-            ("medium", CURRICULUM_TIMESTEPS_MEDIUM, PCG_MAX_STEPS_MEDIUM),
-            ("large",  CURRICULUM_TIMESTEPS_LARGE,  PCG_MAX_STEPS_LARGE),
-        ]
-        total_ts = CURRICULUM_TIMESTEPS_SMALL + CURRICULUM_TIMESTEPS_MEDIUM + CURRICULUM_TIMESTEPS_LARGE
+        # Each stage trains on CURRICULUM_WORLDS_PER_STAGE fixed topologies,
+        # spending CURRICULUM_TIMESTEPS_* steps on each topology.
+        ts_small  = CURRICULUM_WORLDS_PER_STAGE * CURRICULUM_TIMESTEPS_SMALL
+        ts_medium = CURRICULUM_WORLDS_PER_STAGE * CURRICULUM_TIMESTEPS_MEDIUM
+        ts_large  = CURRICULUM_WORLDS_PER_STAGE * CURRICULUM_TIMESTEPS_LARGE
+        total_ts  = ts_small + ts_medium + ts_large
 
-        print(f"Curriculum | total={total_ts:,} | small={CURRICULUM_TIMESTEPS_SMALL:,} / medium={CURRICULUM_TIMESTEPS_MEDIUM:,} / large={CURRICULUM_TIMESTEPS_LARGE:,}")
+        stages = [
+            ("small",  ts_small,  PCG_MAX_STEPS_SMALL),
+            ("medium", ts_medium, PCG_MAX_STEPS_MEDIUM),
+            ("large",  ts_large,  PCG_MAX_STEPS_LARGE),
+        ]
+
+        print(f"Curriculum | {CURRICULUM_WORLDS_PER_STAGE} mondes/stage | total={total_ts:,} steps")
+        print(f"  small  : {CURRICULUM_WORLDS_PER_STAGE}×{CURRICULUM_TIMESTEPS_SMALL:,} = {ts_small:,}")
+        print(f"  medium : {CURRICULUM_WORLDS_PER_STAGE}×{CURRICULUM_TIMESTEPS_MEDIUM:,} = {ts_medium:,}")
+        print(f"  large  : {CURRICULUM_WORLDS_PER_STAGE}×{CURRICULUM_TIMESTEPS_LARGE:,} = {ts_large:,}")
         print(f"Runs : logs/{run_name}_small  /  logs/{run_name}_medium  /  logs/{run_name}_large\n")
 
         prev_model_path = None
@@ -134,7 +144,7 @@ def main() -> None:
         for size, ts, max_steps_pcg in stages:
             stage_log  = f"logs/{run_name}_{size}"
             stage_save = f"models/{run_name}_{size}"
-            print(f"\n=== Stage {size.upper()} | timesteps={ts:,} ===")
+            print(f"\n=== Stage {size.upper()} | {CURRICULUM_WORLDS_PER_STAGE} mondes × {CURRICULUM_TIMESTEPS_SMALL if size == 'small' else CURRICULUM_TIMESTEPS_MEDIUM if size == 'medium' else CURRICULUM_TIMESTEPS_LARGE:,} steps = {ts:,} total ===")
             if prev_model_path:
                 print(f"Transfer depuis : {prev_model_path}")
             model = train(
@@ -149,6 +159,7 @@ def main() -> None:
                 blue_team=blue_team,
                 pcg_size=size,
                 load_model_path=prev_model_path,
+                n_worlds=CURRICULUM_WORLDS_PER_STAGE,
             )
             prev_model_path = f"{stage_save}/red_agent_final.zip"
 

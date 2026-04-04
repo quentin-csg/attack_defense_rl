@@ -83,7 +83,7 @@ class DashboardCallback(BaseCallback):
         self._topo_path = Path(log_path).parent / "network_topology.json"
         self._reset_on_start = reset_on_start
         self._file: Any = None
-        self._last_update_timestep: int = -1
+        self._last_n_updates: int = -1
 
     def _on_training_start(self) -> None:
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,25 +116,31 @@ class DashboardCallback(BaseCallback):
                 "max_suspicion": float(terminal_info.get("max_suspicion", 0.0)),
                 "episode_length": float(terminal_info.get("step", 0)),
                 "episode_reward": float(terminal_info.get("episode_reward", 0.0)),
-                "per_node_suspicion": {
-                    str(k): float(v)
-                    for k, v in terminal_info.get("per_node_suspicion", {}).items()
-                },
             }
             self._write(record)
 
-            # Write topology to a separate small file (overwrite each episode).
-            # Kept out of the JSONL to avoid bloating it with redundant topology data.
+            # Write topology + per-node suspicion to a separate small file (overwrite each
+            # episode).  Kept out of the JSONL to avoid bloating it with per-node vectors.
             topo = terminal_info.get("network_topology")
-            if topo is not None:
+            per_node = {
+                str(k): float(v)
+                for k, v in terminal_info.get("per_node_suspicion", {}).items()
+            }
+            if topo is not None or per_node:
                 try:
-                    self._topo_path.write_text(json.dumps(topo), encoding="utf-8")
+                    payload: dict[str, Any] = {}
+                    if topo is not None:
+                        payload["topology"] = topo
+                    if per_node:
+                        payload["per_node_suspicion"] = per_node
+                    self._topo_path.write_text(json.dumps(payload), encoding="utf-8")
                 except OSError:
                     pass
 
         # Capture train metrics from logger after each PPO update.
-        # SB3 flushes name_to_value after dump() — check by timestep change.
-        if self.num_timesteps != self._last_update_timestep:
+        # Write at most once per PPO update by tracking model.n_updates.
+        n_updates: int = getattr(self.model, "n_updates", -1)
+        if n_updates != self._last_n_updates:
             name_to_value: dict[str, Any] = getattr(self.model.logger, "name_to_value", {})
             train_keys = {
                 "train/entropy_loss",
@@ -154,7 +160,7 @@ class DashboardCallback(BaseCallback):
                     **train_data,
                 }
                 self._write(update_record)
-                self._last_update_timestep = self.num_timesteps
+            self._last_n_updates = n_updates
 
         return True
 

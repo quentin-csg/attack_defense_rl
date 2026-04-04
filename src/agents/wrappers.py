@@ -52,8 +52,16 @@ def make_pcg_masked_env(
     seed: int | None = None,
     max_steps: int | None = None,
     blue_team: object = None,
+    n_worlds: int | None = None,
 ) -> ActionMasker:
-    """Create a CyberEnv with PCG network generation"""
+    """Create a CyberEnv with PCG network generation.
+
+    Args:
+        n_worlds: If set, cycle through exactly n_worlds fixed topologies (seeds
+            seed+0, seed+1, …, seed+n_worlds-1) instead of sampling a new random
+            topology every episode.  Use this for curriculum stages so the agent
+            revisits each topology multiple times.
+    """
 
     from src.config import PCG_MAX_STEPS_LARGE, PCG_MAX_STEPS_MEDIUM, PCG_MAX_STEPS_SMALL
     from src.pcg.generator import NetworkSize, generate_network
@@ -67,9 +75,19 @@ def make_pcg_masked_env(
     }
     resolved_max_steps = max_steps if max_steps is not None else _size_steps[size_enum]
 
-    def network_factory(episode_seed: int | None):
-        net, _ = generate_network(size_enum, seed=episode_seed)
-        return net
+    if n_worlds is not None:
+        _world_seeds = [(seed or 0) + i for i in range(n_worlds)]
+        _counter = [0]
+
+        def network_factory(episode_seed: int | None):
+            s = _world_seeds[_counter[0] % n_worlds]
+            _counter[0] += 1
+            net, _ = generate_network(size_enum, seed=s)
+            return net
+    else:
+        def network_factory(episode_seed: int | None):
+            net, _ = generate_network(size_enum, seed=episode_seed)
+            return net
 
     base_env = CyberEnv(
         network_factory=network_factory,

@@ -171,18 +171,21 @@ st.markdown("---")
 col_graph, col_eval = st.columns(2, gap="large")
 
 with col_graph:
-    # Colour nodes by per-node suspicion from the last episode in the current view.
+    # Read topology + per-node suspicion from the single overwriting JSON file.
     suspicion_data: dict[int, float] | None = None
-    if not ep_df.empty and "per_node_suspicion" in ep_df.columns:
-        last_susp = ep_df["per_node_suspicion"].dropna()
-        if not last_susp.empty and isinstance(last_susp.iloc[-1], dict):
-            suspicion_data = {int(k): float(v) for k, v in last_susp.iloc[-1].items()}
-
     topology_data: dict | None = None
     _topo_file = Path(topo_path)
     if _topo_file.exists():
         try:
-            topology_data = json.loads(_topo_file.read_text(encoding="utf-8"))
+            _topo_payload = json.loads(_topo_file.read_text(encoding="utf-8"))
+            # Support both old format (raw topology dict) and new format ({topology, per_node_suspicion}).
+            if "topology" in _topo_payload:
+                topology_data = _topo_payload["topology"]
+                _susp = _topo_payload.get("per_node_suspicion", {})
+                if _susp:
+                    suspicion_data = {int(k): float(v) for k, v in _susp.items()}
+            else:
+                topology_data = _topo_payload
         except (OSError, json.JSONDecodeError):
             topology_data = None
 

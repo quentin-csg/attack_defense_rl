@@ -90,6 +90,7 @@ def train(
     blue_team: object = None,
     pcg_size: str | None = None,
     load_model_path: str | None = None,
+    n_worlds: int | None = None,
 ) -> MaskablePPO:
     """Run the full Red Team training pipeline."""
     if log_dir is not None:
@@ -108,7 +109,9 @@ def train(
     eval_blue = _make_eval_blue_team(blue_team, seed + 9999)
     if pcg_size is not None:
         from src.agents.wrappers import make_pcg_masked_env
-        train_env = make_pcg_masked_env(size=pcg_size, seed=seed, max_steps=max_steps, blue_team=blue_team)
+        train_env = make_pcg_masked_env(
+            size=pcg_size, seed=seed, max_steps=max_steps, blue_team=blue_team, n_worlds=n_worlds
+        )
         eval_env = make_pcg_masked_env(size=pcg_size, seed=seed + 1000, max_steps=max_steps, blue_team=eval_blue)
     else:
         train_env = make_masked_env(seed=seed, max_steps=max_steps, blue_team=blue_team)
