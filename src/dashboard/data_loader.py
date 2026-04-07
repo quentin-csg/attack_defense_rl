@@ -8,54 +8,81 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+
 @st.cache_data(show_spinner=False)
-def _load_metrics_cached(path: str, _mtime: float) -> pd.DataFrame:
-    """Read the full JSONL file. ``_mtime`` is used only as a cache key."""
-    records: list[dict[str, Any]] = []
+def _parse_jsonl(path: str, _mtime: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Stream the JSONL file and return (episode_df, update_df).
+
+    Reads line-by-line to avoid loading the full file into memory.
+    Drops ``per_node_suspicion`` from episode records (now stored in
+    ``network_topology.json`` instead).  Update records are capped at
+    MAX_UPDATE_ROWS to bound memory on legacy bloated files.
+    """
+    MAX_UPDATE_ROWS = 2_000
+
+    episodes: list[dict[str, Any]] = []
+    updates: list[dict[str, Any]] = []
+    update_step = 1  # will be recomputed once we know total lines
+
+    # First pass: count update lines to decide sampling stride.
+    # We do a lightweight count-only scan so we know whether to sample.
+    n_updates_total = 0
     try:
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    except (OSError, json.JSONDecodeError):
-        return pd.DataFrame()
-    return pd.DataFrame(records) if records else pd.DataFrame()
+        with Path(path).open(encoding="utf-8") as f:
+            for line in f:
+                if '"type": "update"' in line:
+                    n_updates_total += 1
+    except OSError:
+        return pd.DataFrame(), pd.DataFrame()
 
+    if n_updates_total > MAX_UPDATE_ROWS:
+        update_step = max(1, n_updates_total // MAX_UPDATE_ROWS)
 
-def load_metrics(
-    path: str = "logs/dashboard_metrics.jsonl",
-    last_n: int | None = None,
-) -> pd.DataFrame:
-    """Load the JSONL metrics file into a DataFrame."""
-    p = Path(path)
-    if not p.exists():
-        return pd.DataFrame()
+    update_counter = 0
+    try:
+        with Path(path).open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record: dict[str, Any] = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-    mtime = p.stat().st_mtime
-    df = _load_metrics_cached(path, mtime)
+                t = record.get("type")
+                if t == "episode":
+                    record.pop("per_node_suspicion", None)
+                    episodes.append(record)
+                elif t == "update":
+                    if update_counter % update_step == 0:
+                        updates.append(record)
+                    update_counter += 1
+    except OSError:
+        pass
 
-    if last_n is not None and not df.empty:
-        df = df.tail(last_n).reset_index(drop=True)
-
-    return df
+    return (
+        pd.DataFrame(episodes) if episodes else pd.DataFrame(),
+        pd.DataFrame(updates) if updates else pd.DataFrame(),
+    )
 
 
 def load_episode_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataFrame:
-    """Load only episode-type rows from the JSONL file."""
-    df = load_metrics(path)
-    if df.empty or "type" not in df.columns:
+    """Load episode-type rows from the JSONL file."""
+    p = Path(path)
+    if not p.exists():
         return pd.DataFrame()
-    ep = df[df["type"] == "episode"].copy()
-    return ep.reset_index(drop=True)
+    ep_df, _ = _parse_jsonl(path, p.stat().st_mtime)
+    return ep_df
 
 
 def load_update_metrics(path: str = "logs/dashboard_metrics.jsonl") -> pd.DataFrame:
-    """Load only update-type rows (PPO training metrics) from the JSONL file."""
-    df = load_metrics(path)
-    if df.empty or "type" not in df.columns:
+    """Load update-type rows (PPO training metrics) from the JSONL file."""
+    p = Path(path)
+    if not p.exists():
         return pd.DataFrame()
-    upd = df[df["type"] == "update"].copy()
-    return upd.reset_index(drop=True)
+    _, upd_df = _parse_jsonl(path, p.stat().st_mtime)
+    return upd_df
 
 
 def load_evaluations(path: str = "logs/evaluations.npz") -> pd.DataFrame:
@@ -69,9 +96,9 @@ def load_evaluations(path: str = "logs/evaluations.npz") -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-    timesteps = data["timesteps"]         # shape (N,)
-    results = data["results"]             # shape (N, n_eval_episodes)
-    ep_lengths = data["ep_lengths"]       # shape (N, n_eval_episodes)
+    timesteps = data["timesteps"]
+    results = data["results"]
+    ep_lengths = data["ep_lengths"]
 
     return pd.DataFrame(
         {
