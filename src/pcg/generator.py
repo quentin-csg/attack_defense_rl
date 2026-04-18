@@ -282,23 +282,6 @@ def _connect_zones_sequential(
             G.add_edge(alt_src, alt_dst)
 
 
-def _add_cross_zone_edges(
-    G: nx.Graph, subnet_node_ids: list[list[int]], rng: random.Random, n_extra: int = 1
-) -> None:
-    """Add cross-zone shortcut edges (skip one zone) for network variety."""
-    n_subnets = len(subnet_node_ids)
-    added = 0
-    attempts = 0
-    while added < n_extra and attempts < 20:
-        attempts += 1
-        i = rng.randint(0, n_subnets - 3)
-        src = rng.choice(subnet_node_ids[i])
-        dst = rng.choice(subnet_node_ids[i + 2])
-        if not G.has_edge(src, dst):
-            G.add_edge(src, dst)
-            added += 1
-
-
 def _make_node(
     node_id: int, zone: Zone, is_target: bool, rng: random.Random, total_nodes: int = 20
 ) -> Node:

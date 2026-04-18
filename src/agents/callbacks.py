@@ -137,10 +137,13 @@ class DashboardCallback(BaseCallback):
                 except OSError:
                     pass
 
-        # Capture train metrics from logger after each PPO update.
-        # Write at most once per PPO update by tracking model.n_updates.
-        n_updates: int = getattr(self.model, "n_updates", -1)
-        if n_updates != self._last_n_updates:
+        # Capture train metrics from logger once per rollout.
+        # Use num_timesteps // n_steps as the rollout counter — 1 write per
+        # rollout regardless of n_epochs or SB3 version (n_updates increments
+        # n_epochs times per rollout, which would produce n_epochs writes).
+        n_steps: int = getattr(self.model, "n_steps", 2048)
+        rollout_count: int = self.num_timesteps // n_steps if n_steps > 0 else -1
+        if rollout_count != self._last_n_updates:
             name_to_value: dict[str, Any] = getattr(self.model.logger, "name_to_value", {})
             train_keys = {
                 "train/entropy_loss",
@@ -160,7 +163,7 @@ class DashboardCallback(BaseCallback):
                     **train_data,
                 }
                 self._write(update_record)
-            self._last_n_updates = n_updates
+            self._last_n_updates = rollout_count
 
         return True
 
